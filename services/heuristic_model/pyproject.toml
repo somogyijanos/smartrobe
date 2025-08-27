@@ -1,0 +1,16 @@
+[project]
+name = "smartrobe-heuristic-model"
+version = "0.1.0"
+description = "Heuristic model service for rule-based attribute extraction from clothing images"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pillow",
+    "loguru",
+    "pydantic",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

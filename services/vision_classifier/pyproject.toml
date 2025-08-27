@@ -1,0 +1,16 @@
+[project]
+name = "smartrobe-vision-classifier"
+version = "0.1.0"
+description = "Vision classifier service for extracting visual attributes from clothing images"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pillow",
+    "loguru",
+    "pydantic",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

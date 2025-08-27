@@ -1,0 +1,55 @@
+[project]
+name = "smartrobe"
+version = "0.1.0"
+description = "Multi-Model Attribute Extraction Service for Second-Hand Clothing"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Core Framework
+    "fastapi",
+    "uvicorn[standard]",
+    
+    # Database
+    "sqlalchemy[asyncio]",
+    "asyncpg",
+    
+    # Data Validation & Serialization
+    "pydantic",
+    
+    # HTTP Client & Image Processing
+    "httpx",
+    "pillow",
+    
+    # Logging & Utilities
+    "loguru",
+    "python-multipart",
+    "python-dotenv",
+]
+
+[tool.uv.workspace]
+members = [
+    "orchestrator",
+    "services/vision_classifier", 
+    "services/heuristic_model",
+    "services/llm_model",
+    "shared"
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings  
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+
+
+
+

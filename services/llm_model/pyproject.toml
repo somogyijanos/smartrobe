@@ -1,0 +1,17 @@
+[project]
+name = "smartrobe-llm-model"
+version = "0.1.0"
+description = "LLM model service for contextual attribute extraction from clothing images"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pillow",
+    "loguru",
+    "pydantic",
+    "httpx",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

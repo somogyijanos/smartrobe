@@ -1,0 +1,21 @@
+[project]
+name = "smartrobe-orchestrator"
+version = "0.1.0"
+description = "Main orchestrator service for Smartrobe - coordinates image processing across model services"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "asyncpg",
+    "sqlalchemy[asyncio]",
+    "pydantic",
+    "pillow",
+    "loguru",
+    "python-multipart",
+    "python-dotenv",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
