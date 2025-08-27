@@ -26,6 +26,13 @@ dependencies = [
     "python-dotenv",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "httpx",  # for testing
+]
+
 [tool.uv.workspace]
 members = [
     "orchestrator",

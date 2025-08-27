@@ -1,14 +1,13 @@
 [project]
 name = "smartrobe-shared"
-version = "0.1.0" 
-description = "Shared utilities, schemas, and common code for Smartrobe services"
+version = "0.1.0"
+description = "Shared components for Smartrobe microservices"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic",
-    "loguru",
-    "sqlalchemy[asyncio]",
+    "loguru", 
+    "fastapi",
+    "httpx",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+
