@@ -391,7 +391,7 @@ class LogConfig(BaseModel):
     """Logging configuration."""
 
     level: str = "INFO"
-    format: str = "json"
+    format: str = "text"
 
     @validator("level")
     def validate_log_level(cls, v):
