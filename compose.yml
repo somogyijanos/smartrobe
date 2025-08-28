@@ -1,0 +1,248 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: smartrobe-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smartrobe-network
+
+  # Orchestrator Service
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: smartrobe-orchestrator
+    environment:
+      # Database Configuration
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      
+      # Service Configuration
+      ORCHESTRATOR_PORT: 8000
+      VISION_SERVICE_PORT: 8001
+      HEURISTIC_SERVICE_PORT: 8002
+      LLM_SERVICE_PORT: 8003
+      
+      # Service URLs
+      VISION_SERVICE_URL: http://vision-classifier:8001
+      HEURISTIC_SERVICE_URL: http://heuristic-model:8002
+      LLM_SERVICE_URL: http://llm-model:8003
+      
+      # Shared Storage
+      SHARED_STORAGE_PATH: /app/shared_storage
+      
+      # Image Processing
+      MAX_IMAGE_SIZE_MB: 10
+      ALLOWED_IMAGE_FORMATS: jpeg,jpg,png,webp
+      IMAGE_DOWNLOAD_TIMEOUT: 30
+      
+      # API Configuration
+      SERVICE_REQUEST_TIMEOUT: 30
+      MAX_CONCURRENT_REQUESTS: 10
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # Development
+      DEBUG: ${DEBUG:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    volumes:
+      - shared_storage:/app/shared_storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vision-classifier:
+        condition: service_healthy
+      heuristic-model:
+        condition: service_healthy
+      llm-model:
+        condition: service_healthy
+    networks:
+      - smartrobe-network
+    restart: unless-stopped
+
+  # Vision Classifier Service
+  vision-classifier:
+    build:
+      context: .
+      dockerfile: Dockerfile.vision
+    container_name: smartrobe-vision-classifier
+    environment:
+      # Service Configuration
+      ORCHESTRATOR_PORT: 8000
+      VISION_SERVICE_PORT: 8001
+      HEURISTIC_SERVICE_PORT: 8002
+      LLM_SERVICE_PORT: 8003
+      
+      # Service URLs (not needed for model services, but required by config)
+      VISION_SERVICE_URL: http://vision-classifier:8001
+      HEURISTIC_SERVICE_URL: http://heuristic-model:8002
+      LLM_SERVICE_URL: http://llm-model:8003
+      
+      # Database (not directly used by model services)
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      
+      # Shared Storage
+      SHARED_STORAGE_PATH: /app/shared_storage
+      
+      # Image Processing
+      MAX_IMAGE_SIZE_MB: 10
+      ALLOWED_IMAGE_FORMATS: jpeg,jpg,png,webp
+      IMAGE_DOWNLOAD_TIMEOUT: 30
+      
+      # API Configuration
+      SERVICE_REQUEST_TIMEOUT: 30
+      MAX_CONCURRENT_REQUESTS: 10
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # Development
+      DEBUG: ${DEBUG:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8001:8001"
+    volumes:
+      - shared_storage:/app/shared_storage
+    networks:
+      - smartrobe-network
+    restart: unless-stopped
+
+  # Heuristic Model Service
+  heuristic-model:
+    build:
+      context: .
+      dockerfile: Dockerfile.heuristic
+    container_name: smartrobe-heuristic-model
+    environment:
+      # Service Configuration
+      ORCHESTRATOR_PORT: 8000
+      VISION_SERVICE_PORT: 8001
+      HEURISTIC_SERVICE_PORT: 8002
+      LLM_SERVICE_PORT: 8003
+      
+      # Service URLs
+      VISION_SERVICE_URL: http://vision-classifier:8001
+      HEURISTIC_SERVICE_URL: http://heuristic-model:8002
+      LLM_SERVICE_URL: http://llm-model:8003
+      
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      
+      # Shared Storage
+      SHARED_STORAGE_PATH: /app/shared_storage
+      
+      # Image Processing
+      MAX_IMAGE_SIZE_MB: 10
+      ALLOWED_IMAGE_FORMATS: jpeg,jpg,png,webp
+      IMAGE_DOWNLOAD_TIMEOUT: 30
+      
+      # API Configuration
+      SERVICE_REQUEST_TIMEOUT: 30
+      MAX_CONCURRENT_REQUESTS: 10
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # Development
+      DEBUG: ${DEBUG:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8002:8002"
+    volumes:
+      - shared_storage:/app/shared_storage
+    networks:
+      - smartrobe-network
+    restart: unless-stopped
+
+  # LLM Model Service
+  llm-model:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm
+    container_name: smartrobe-llm-model
+    environment:
+      # Service Configuration
+      ORCHESTRATOR_PORT: 8000
+      VISION_SERVICE_PORT: 8001
+      HEURISTIC_SERVICE_PORT: 8002
+      LLM_SERVICE_PORT: 8003
+      
+      # Service URLs
+      VISION_SERVICE_URL: http://vision-classifier:8001
+      HEURISTIC_SERVICE_URL: http://heuristic-model:8002
+      LLM_SERVICE_URL: http://llm-model:8003
+      
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      
+      # Shared Storage
+      SHARED_STORAGE_PATH: /app/shared_storage
+      
+      # Image Processing
+      MAX_IMAGE_SIZE_MB: 10
+      ALLOWED_IMAGE_FORMATS: jpeg,jpg,png,webp
+      IMAGE_DOWNLOAD_TIMEOUT: 30
+      
+      # API Configuration
+      SERVICE_REQUEST_TIMEOUT: 30
+      MAX_CONCURRENT_REQUESTS: 10
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # Development
+      DEBUG: ${DEBUG:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8003:8003"
+    volumes:
+      - shared_storage:/app/shared_storage
+    networks:
+      - smartrobe-network
+    restart: unless-stopped
+
+# Volumes
+volumes:
+  postgres_data:
+    driver: local
+  shared_storage:
+    driver: local
+
+# Networks
+networks:
+  smartrobe-network:
+    driver: bridge

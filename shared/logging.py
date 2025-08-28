@@ -16,26 +16,26 @@ def setup_logging(service_name: str) -> None:
     # Remove default logger
     logger.remove()
 
-    # Simple format
+    # Configure format based on log format setting
     if settings.log_format.lower() == "json":
-        format_string = (
-            '{"time": "{time:YYYY-MM-DD HH:mm:ss}", '
-            '"level": "{level}", '
-            '"service": "' + service_name + '", '
-            '"message": "{message}"}'
-        )
+        # When using serialize=True, loguru handles JSON formatting automatically
+        # Use a minimal format string that works with serialization
+        format_string = "{message}"
+        serialize_logs = True
     else:
-        format_string = "{time:HH:mm:ss} | {level: <8} | {service} | {message}"
+        # For text format, use a readable format
+        format_string = "{time:HH:mm:ss} | {level: <8} | {message}"
+        serialize_logs = False
 
     # Add console handler
     logger.add(
         sys.stdout,
         format=format_string,
         level=settings.log_level,
-        serialize=settings.log_format.lower() == "json",
+        serialize=serialize_logs,
     )
 
-    # Add service context
+    # Add service context - this will be included in serialized logs automatically
     logger.configure(extra={"service": service_name})
 
 

@@ -234,7 +234,7 @@ class ServiceRequest(BaseModel):
     """Base request model for service communication."""
 
     request_id: UUID
-    image_paths: list[str] = Field(..., min_items=4, max_items=4)
+    image_paths: list[str] = Field(..., min_items=1, max_items=4)
 
 
 class ServiceResponse(BaseModel):
@@ -274,7 +274,7 @@ class LLMServiceResponse(ServiceResponse):
 class AnalyzeRequest(BaseModel):
     """API request for item analysis."""
 
-    images: list[HttpUrl] = Field(..., min_items=4, max_items=4)
+    images: list[HttpUrl] = Field(..., min_items=1, max_items=4)
 
     @validator("images")
     def validate_image_urls(cls, v):
@@ -304,6 +304,7 @@ class ProcessingInfo(BaseModel):
     image_download_time_ms: int
     parallel_processing: bool = True
     timestamp: datetime
+    image_count: int
 
 
 class AnalyzeResponse(BaseModel):

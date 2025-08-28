@@ -108,7 +108,7 @@ Build a multi-model attribute extraction service that processes 4 photos of seco
 ### Core Framework
 - **FastAPI**: High-performance API framework with automatic OpenAPI docs
 - **PostgreSQL**: Production-ready database with excellent Docker support
-- **Docker + docker-compose**: Containerization and orchestration
+- **Docker + docker compose**: Containerization and orchestration
 
 ### Package Management & Code Quality
 - **uv**: Fast Python package installer and resolver
@@ -268,7 +268,7 @@ CREATE INDEX idx_inference_attributes ON inference_results USING GIN(attributes)
 ### Phase 3: Infrastructure (1.5 hours)
 #### 3.1 Containerization (60 min)
 - [ ] Create multi-stage Dockerfiles for each service
-- [ ] Setup docker-compose.yml with PostgreSQL
+- [ ] Setup compose.yml with PostgreSQL
 - [ ] Configure shared volumes for image storage
 - [ ] Add environment variable management
 - [ ] Setup networking between services
@@ -334,7 +334,7 @@ async def test_analyze_endpoint():
 ### Local Development
 ```bash
 # Start all services
-docker-compose up --build
+docker compose up --build
 
 # Test API
 curl -X POST "http://localhost:8000/v1/items/analyze" \
@@ -397,7 +397,7 @@ curl -X POST "http://localhost:8000/v1/items/analyze" \
 - ✅ Working API endpoint with 13 attribute extraction
 - ✅ 3 model types processing in parallel
 - ✅ Database persistence of results
-- ✅ Docker containerization with docker-compose
+- ✅ Docker containerization with docker compose
 
 ### Technical
 - ✅ <2-8 second response times
