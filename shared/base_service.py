@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import get_settings
+from .config import get_model_service_settings, get_settings
 from .logging import get_logger, setup_logging
 from .schemas import HealthCheck, HealthStatus
 
@@ -25,13 +25,13 @@ from .schemas import HealthCheck, HealthStatus
 class BaseService(ABC):
     """Base class for all Smartrobe microservices."""
 
-    def __init__(self, service_name: str, version: str = "1.0.0"):
+    def __init__(self, service_name: str, version: str = "1.0.0", settings=None):
         self.service_name = service_name
         self.version = version
-        self.settings = get_settings()
+        self.settings = settings if settings is not None else get_settings()
 
         # Setup logging
-        setup_logging(service_name)
+        setup_logging(service_name, self.settings)
         self.logger = get_logger(f"{service_name}.base")
 
         # Create FastAPI app
@@ -208,7 +208,7 @@ class BaseService(ABC):
         import uvicorn
 
         # Get configuration
-        service_config = self.settings.get_service_config(self.service_name)
+        service_config = self.settings.get_service_config()
 
         run_host = host or service_config.host
         run_port = port or service_config.port
@@ -235,7 +235,8 @@ class ModelService(BaseService):
 
     def __init__(self, service_name: str, model_type: str, version: str = "1.0.0"):
         self.model_type = model_type
-        super().__init__(service_name, version)
+        # Pass model service settings to base class
+        super().__init__(service_name, version, settings=get_model_service_settings())
 
     @abstractmethod
     async def extract_attributes(

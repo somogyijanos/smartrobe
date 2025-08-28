@@ -12,60 +12,15 @@ from pydantic import BaseModel, validator
 from .schemas import DatabaseConfig, ImageConfig, LogConfig, ServiceConfig
 
 
-class Settings(BaseModel):
-    """Application settings loaded from environment variables."""
-
-    # =============================================================================
-    # DATABASE CONFIGURATION
-    # =============================================================================
-    database_url: str
-    postgres_user: str
-    postgres_password: str
-    postgres_db: str
-
-    # =============================================================================
-    # SERVICE CONFIGURATION
-    # =============================================================================
-    orchestrator_port: int
-    vision_service_port: int
-    heuristic_service_port: int
-    llm_service_port: int
-
-    # Service URLs for inter-service communication
-    vision_service_url: str
-    heuristic_service_url: str
-    llm_service_url: str
-
-    # =============================================================================
-    # SHARED STORAGE
-    # =============================================================================
+class BaseSettings(BaseModel):
+    """Base settings shared by all services."""
+    # Common to all services
     shared_storage_path: str
-
-    # =============================================================================
-    # IMAGE PROCESSING
-    # =============================================================================
-    max_image_size_mb: int
-    allowed_image_formats: list[str]
-    image_download_timeout: int
-
-    # =============================================================================
-    # API CONFIGURATION
-    # =============================================================================
-    service_request_timeout: int
-    max_concurrent_requests: int
-
-    # =============================================================================
-    # LOGGING
-    # =============================================================================
     log_level: str
     log_format: str
-
-    # =============================================================================
-    # DEVELOPMENT SETTINGS
-    # =============================================================================
     debug: bool
     environment: str
-
+    
     @validator("log_level")
     def validate_log_level(cls, v):
         """Validate log level."""
@@ -82,27 +37,60 @@ class Settings(BaseModel):
             raise ValueError(f"Environment must be one of {valid_envs}")
         return v.lower()
 
+    def get_log_config(self) -> LogConfig:
+        """Get logging configuration."""
+        return LogConfig(level=self.log_level, format=self.log_format)
+
+
+class ModelServiceSettings(BaseSettings):
+    """Settings for model services (vision, heuristic, llm)."""
+    service_port: int = 8000  # All services use same internal port
+    
+    def get_service_config(self) -> ServiceConfig:
+        """Get service configuration."""
+        return ServiceConfig(
+            port=self.service_port,
+            timeout_seconds=30,  # Default timeout
+            max_concurrent_requests=10,  # Default concurrency
+        )
+
+
+class OrchestratorSettings(BaseSettings):
+    """Settings for orchestrator service (needs everything)."""
+    
+    # Database Configuration
+    database_url: str
+    postgres_user: str
+    postgres_password: str
+    postgres_db: str
+
+    # Service Configuration 
+    orchestrator_port: int = 8000  # Same internal port as others
+    
+    # Service URLs for inter-service communication
+    vision_service_url: str
+    heuristic_service_url: str
+    llm_service_url: str
+
+    # Image Processing
+    max_image_size_mb: int
+    allowed_image_formats: list[str]
+    image_download_timeout: int
+
+    # API Configuration
+    service_request_timeout: int
+    max_concurrent_requests: int
+
     def get_database_config(self) -> DatabaseConfig:
         """Get database configuration."""
         return DatabaseConfig(
             url=self.database_url, timeout_seconds=self.service_request_timeout
         )
 
-    def get_service_config(self, service_name: str) -> ServiceConfig:
-        """Get service configuration for a specific service."""
-        port_mapping = {
-            "orchestrator": self.orchestrator_port,
-            "vision_classifier": self.vision_service_port,
-            "heuristic_model": self.heuristic_service_port,
-            "llm_model": self.llm_service_port,
-        }
-
-        port = port_mapping.get(service_name)
-        if port is None:
-            raise ValueError(f"Unknown service: {service_name}")
-
+    def get_service_config(self) -> ServiceConfig:
+        """Get orchestrator service configuration."""
         return ServiceConfig(
-            port=port,
+            port=self.orchestrator_port,
             timeout_seconds=self.service_request_timeout,
             max_concurrent_requests=self.max_concurrent_requests,
         )
@@ -116,30 +104,56 @@ class Settings(BaseModel):
             storage_path=self.shared_storage_path,
         )
 
-    def get_log_config(self) -> LogConfig:
-        """Get logging configuration."""
-        return LogConfig(level=self.log_level, format=self.log_format)
+    def get_service_url(self, service_name: str) -> str:
+        """Get the URL for a specific service."""
+        url_mapping = {
+            "vision_classifier": self.vision_service_url,
+            "heuristic_model": self.heuristic_service_url,
+            "llm_model": self.llm_service_url,
+        }
+        
+        url = url_mapping.get(service_name)
+        if url is None:
+            raise ValueError(f"Unknown service: {service_name}")
+        return url
 
 
-def get_settings() -> Settings:
-    """Get application settings singleton."""
-    if not hasattr(get_settings, "_instance"):
+# Legacy Settings class for backward compatibility during transition
+Settings = OrchestratorSettings
 
+
+def get_model_service_settings() -> ModelServiceSettings:
+    """Get model service settings (for vision, heuristic, llm services)."""
+    if not hasattr(get_model_service_settings, "_instance"):
+        def parse_bool(value: str) -> bool:
+            return value.lower() in ("true", "1", "yes", "on")
+
+        get_model_service_settings._instance = ModelServiceSettings(
+            service_port=int(os.environ.get("SERVICE_PORT", "8000")),
+            shared_storage_path=os.environ["SHARED_STORAGE_PATH"],
+            log_level=os.environ["LOG_LEVEL"],
+            log_format=os.environ["LOG_FORMAT"],
+            debug=parse_bool(os.environ["DEBUG"]),
+            environment=os.environ["ENVIRONMENT"],
+        )
+    return get_model_service_settings._instance
+
+
+def get_orchestrator_settings() -> OrchestratorSettings:
+    """Get orchestrator settings (needs full configuration)."""
+    if not hasattr(get_orchestrator_settings, "_instance"):
         def parse_bool(value: str) -> bool:
             return value.lower() in ("true", "1", "yes", "on")
 
         def parse_formats(formats_str: str) -> list[str]:
             return [fmt.strip().lower() for fmt in formats_str.split(",")]
 
-        get_settings._instance = Settings(
+        get_orchestrator_settings._instance = OrchestratorSettings(
             database_url=os.environ["DATABASE_URL"],
             postgres_user=os.environ["POSTGRES_USER"],
             postgres_password=os.environ["POSTGRES_PASSWORD"],
             postgres_db=os.environ["POSTGRES_DB"],
-            orchestrator_port=int(os.environ["ORCHESTRATOR_PORT"]),
-            vision_service_port=int(os.environ["VISION_SERVICE_PORT"]),
-            heuristic_service_port=int(os.environ["HEURISTIC_SERVICE_PORT"]),
-            llm_service_port=int(os.environ["LLM_SERVICE_PORT"]),
+            orchestrator_port=int(os.environ.get("ORCHESTRATOR_PORT", "8000")),
             vision_service_url=os.environ["VISION_SERVICE_URL"],
             heuristic_service_url=os.environ["HEURISTIC_SERVICE_URL"],
             llm_service_url=os.environ["LLM_SERVICE_URL"],
@@ -154,7 +168,12 @@ def get_settings() -> Settings:
             debug=parse_bool(os.environ["DEBUG"]),
             environment=os.environ["ENVIRONMENT"],
         )
-    return get_settings._instance
+    return get_orchestrator_settings._instance
+
+
+def get_settings() -> OrchestratorSettings:
+    """Get application settings (legacy - use get_orchestrator_settings)."""
+    return get_orchestrator_settings()
 
 
 def create_request_directory(request_id: str, storage_path: str | None = None) -> str:
@@ -180,15 +199,5 @@ def cleanup_request_directory(request_id: str, storage_path: str | None = None) 
 
 def get_service_url(service_name: str) -> str:
     """Get the URL for a specific service."""
-    settings = get_settings()
-    url_mapping = {
-        "vision_classifier": settings.vision_service_url,
-        "heuristic_model": settings.heuristic_service_url,
-        "llm_model": settings.llm_service_url,
-    }
-
-    url = url_mapping.get(service_name)
-    if url is None:
-        raise ValueError(f"Unknown service: {service_name}")
-
-    return url
+    settings = get_orchestrator_settings()
+    return settings.get_service_url(service_name)

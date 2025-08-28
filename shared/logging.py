@@ -9,9 +9,10 @@ from loguru import logger
 from .config import get_settings
 
 
-def setup_logging(service_name: str) -> None:
+def setup_logging(service_name: str, settings=None) -> None:
     """Configure basic structured logging for a service."""
-    settings = get_settings()
+    if settings is None:
+        settings = get_settings()
 
     # Remove default logger
     logger.remove()
