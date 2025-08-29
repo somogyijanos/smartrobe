@@ -1,14 +1,15 @@
 """
-Main orchestrator service for Smartrobe multi-model attribute extraction.
+New capability-based orchestrator service for Smartrobe.
 
-Coordinates image processing across all model services, handles parallel 
-execution, and aggregates results for the final API response.
+Routes attribute extraction requests to appropriate services based on YAML configuration.
+Handles unimplemented attributes with warnings and supports dynamic service routing.
 """
 
 import asyncio
 import os
 import time
 import uuid
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,28 +20,25 @@ from PIL import Image
 
 from database import InferenceRepository, init_database
 from shared.base_service import BaseService
-from shared.config import (
-    cleanup_request_directory,
-    create_request_directory,
-    get_service_url,
-    get_settings,
-)
-from shared.logging import get_logger
+from shared.config import create_request_directory, cleanup_request_directory, get_settings
 from shared.schemas import (
     AllAttributes,
     AnalyzeRequest,
     AnalyzeResponse,
-    HeuristicAttributes,
-    LLMAttributes,
-    ModelInfo,
+    AttributeModelInfo,
+    AttributeRequest,
     ProcessingInfo,
-    ServiceRequest,
-    VisionAttributes,
 )
 
 
-class OrchestratorService(BaseService):
-    """Main orchestrator service for coordinating multi-model processing."""
+class CapabilityOrchestrator(BaseService):
+    """Capability-based orchestrator for dynamic attribute routing."""
+
+    # All 13 required attributes
+    ALL_ATTRIBUTES = [
+        "category", "gender", "sleeve_length", "neckline", "closure_type", "fit",
+        "color", "material", "pattern", "brand", "style", "season", "condition"
+    ]
 
     def __init__(self):
         super().__init__("orchestrator", "1.0.0")
@@ -52,17 +50,70 @@ class OrchestratorService(BaseService):
                 max_keepalive_connections=10,
             ),
         )
+        
+        # Load attribute routing configuration
+        self.attribute_config = self._load_attribute_config()
+        self.service_urls = self._build_service_url_mapping()
+
+    def _load_attribute_config(self) -> dict[str, Any]:
+        """Load attribute routing configuration from YAML file."""
+        config_path = Path(__file__).parent.parent / "config" / "attribute_routing.yml"
+        
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            self.logger.info(
+                "Attribute routing configuration loaded",
+                config_file=str(config_path),
+                implemented_attributes=list(config["attribute_mappings"].keys()),
+                total_services=len(config["services"])
+            )
+            
+            return config
+            
+        except Exception as e:
+            self.logger.error(
+                "Failed to load attribute routing configuration",
+                config_file=str(config_path),
+                error=str(e)
+            )
+            # Return minimal config to avoid complete failure
+            return {
+                "attribute_mappings": {},
+                "services": [],
+                "routing_config": {
+                    "unimplemented_behavior": "return_null_with_warning",
+                    "default_timeout_seconds": 30
+                }
+            }
+
+    def _build_service_url_mapping(self) -> dict[str, str]:
+        """Build mapping of service names to their URLs."""
+        url_mapping = {}
+        
+        for service in self.attribute_config.get("services", []):
+            service_name = service["name"]
+            service_url = service["url"]
+            url_mapping[service_name] = service_url
+            
+        self.logger.info(
+            "Service URL mapping built",
+            services=list(url_mapping.keys())
+        )
+        
+        return url_mapping
 
     def _add_routes(self, app: FastAPI) -> None:
-        """Add orchestrator-specific routes."""
+        """Add orchestrator routes."""
 
         @app.post("/v1/items/analyze", response_model=AnalyzeResponse)
         async def analyze_item(request: AnalyzeRequest) -> AnalyzeResponse:
             """
-            Analyze clothing item from 4 images using all model services.
+            Analyze clothing item using capability-based routing.
             
-            Process images through vision classifier, heuristic model, and LLM
-            services in parallel, then aggregate results with metadata.
+            Routes each attribute to its configured service and handles
+            unimplemented attributes with warnings.
             """
             start_time = time.time()
             request_id = uuid.uuid4()
@@ -82,59 +133,62 @@ class OrchestratorService(BaseService):
                 )
                 download_time_ms = int((time.time() - download_start) * 1000)
 
-                # Process through all model services in parallel
+                # Route attributes to services
                 processing_start = time.time()
                 
-                vision_result, heuristic_result, llm_result = await asyncio.gather(
-                    self._call_vision_service(request_id, image_paths),
-                    self._call_heuristic_service(request_id, image_paths),
-                    self._call_llm_service(request_id, image_paths),
-                    return_exceptions=True,
+                attributes, model_info = await self._route_attributes_to_services(
+                    request_id, image_paths
                 )
-
+                
                 processing_time_ms = int((time.time() - processing_start) * 1000)
-
-                # Aggregate results
-                attributes, model_info = self._aggregate_results(
-                    vision_result, heuristic_result, llm_result
-                )
-
                 total_time_ms = int((time.time() - start_time) * 1000)
+
+                # Determine implemented vs skipped attributes
+                implemented_attrs = [attr for attr in self.ALL_ATTRIBUTES 
+                                   if getattr(attributes, attr) is not None]
+                skipped_attrs = [attr for attr in self.ALL_ATTRIBUTES 
+                               if getattr(attributes, attr) is None]
 
                 # Create response
                 response = AnalyzeResponse(
                     id=request_id,
                     attributes=attributes,
                     model_info=model_info,
-                    processing_info=ProcessingInfo(
+                    processing=ProcessingInfo(
                         request_id=request_id,
                         total_processing_time_ms=total_time_ms,
                         image_download_time_ms=download_time_ms,
-                        parallel_processing=True,
                         timestamp=datetime.utcnow(),
-                        image_count=len(request.images),
+                        image_count=image_count,
+                        implemented_attributes=implemented_attrs,
+                        skipped_attributes=skipped_attrs,
                     ),
                 )
 
                 # Store in database
+                database_stored = False
                 try:
                     await InferenceRepository.create_inference_result(
                         response, {"images": [str(url) for url in request.images]}
                     )
+                    database_stored = True
                 except Exception as e:
+                    # Log with just the essential error details
                     self.logger.error(
-                        "Failed to store inference result",
+                        f"Failed to store inference result: {type(e).__name__}: {str(e)}",
                         request_id=str(request_id),
-                        error=str(e),
                     )
-                    # Continue without failing the request
+                    # Don't swallow the exception - let it bubble up or handle appropriately
+                    # For now, we'll continue processing but mark the issue clearly
 
+                # Note: Even if database storage failed, the analysis itself succeeded
                 self.logger.info(
-                    "Item analysis completed successfully",
+                    "Item analysis completed",
                     request_id=str(request_id),
                     total_time_ms=total_time_ms,
-                    download_time_ms=download_time_ms,
-                    processing_time_ms=processing_time_ms,
+                    implemented_count=len(implemented_attrs),
+                    skipped_count=len(skipped_attrs),
+                    database_stored=database_stored,
                 )
 
                 return response
@@ -165,54 +219,163 @@ class OrchestratorService(BaseService):
                         error=str(e),
                     )
 
-    async def _initialize_service(self) -> None:
-        """Initialize orchestrator service."""
-        # Initialize database
-        await init_database(self.settings.database_url)
+    async def _route_attributes_to_services(
+        self, request_id: uuid.UUID, image_paths: list[str]
+    ) -> tuple[AllAttributes, dict[str, AttributeModelInfo]]:
+        """
+        Route attributes to their configured services and collect results.
         
-        # Ensure shared storage directory exists
-        os.makedirs(self.settings.shared_storage_path, exist_ok=True)
+        Returns:
+            Tuple of (attributes, model_info)
+        """
+        attribute_mappings = self.attribute_config["attribute_mappings"]
         
-        # Test service connectivity
-        await self._test_service_connectivity()
+        # Separate implemented from unimplemented attributes
+        implemented_attrs = []
+        unimplemented_attrs = []
+        
+        for attr in self.ALL_ATTRIBUTES:
+            if attr in attribute_mappings:
+                implemented_attrs.append(attr)
+            else:
+                unimplemented_attrs.append(attr)
 
-    async def _cleanup_service(self) -> None:
-        """Cleanup orchestrator service."""
-        await self.client.aclose()
+        self.logger.info(
+            "Routing attributes to services",
+            request_id=str(request_id),
+            implemented=implemented_attrs,
+            unimplemented=unimplemented_attrs,
+        )
 
-    async def _check_service_health(self) -> bool:
-        """Check health of all dependent services."""
+        # Create tasks for implemented attributes
+        tasks = []
+        for attr in implemented_attrs:
+            service_name = attribute_mappings[attr]
+            task = self._call_attribute_service(request_id, attr, service_name, image_paths)
+            tasks.append(task)
+
+        # Execute all attribute extractions in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        attribute_values = {}
+        model_info = {}
+
+        # Handle implemented attributes
+        for i, (attr, result) in enumerate(zip(implemented_attrs, results)):
+            if isinstance(result, Exception):
+                self.logger.error(
+                    f"Attribute extraction failed for {attr}",
+                    request_id=str(request_id),
+                    attribute=attr,
+                    error=str(result),
+                )
+                attribute_values[attr] = None
+            else:
+                attr_response, model_info_item = result
+                attribute_values[attr] = attr_response.attribute_value
+                model_info[attr] = model_info_item
+
+        # Handle unimplemented attributes - just set to None
+        for attr in unimplemented_attrs:
+            attribute_values[attr] = None
+
+        # Create AllAttributes object
+        attributes = AllAttributes(**attribute_values)
+
+        return attributes, model_info
+
+    async def _call_attribute_service(
+        self, request_id: uuid.UUID, attribute_name: str, service_name: str, image_paths: list[str]
+    ) -> tuple[Any, AttributeModelInfo]:
+        """
+        Call a specific service for a single attribute.
+        
+        Returns:
+            Tuple of (AttributeResponse, AttributeModelInfo)
+        """
+        service_url = self.service_urls.get(service_name)
+        if not service_url:
+            raise ValueError(f"Service URL not found for service: {service_name}")
+
+        # Get service type from config
+        service_type = None
+        for service in self.attribute_config["services"]:
+            if service["name"] == service_name:
+                service_type = service["type"]
+                break
+
+        endpoint_url = f"{service_url}/extract/{attribute_name}"
+        
+        request_data = AttributeRequest(
+            request_id=request_id,
+            attribute_name=attribute_name,
+            image_paths=image_paths
+        )
+
+        self.logger.debug(
+            f"Calling service for attribute '{attribute_name}'",
+            request_id=str(request_id),
+            service_name=service_name,
+            endpoint_url=endpoint_url,
+        )
+
+        start_time = time.time()
+        
         try:
-            # Check database
-            from database import get_database_manager
-            db_manager = get_database_manager()
-            if not await db_manager.health_check():
-                return False
-
-            # Check model services
-            services = ["vision_classifier", "heuristic_model", "llm_model"]
+            response = await self.client.post(
+                endpoint_url,
+                json=request_data.model_dump(mode='json'),
+            )
+            response.raise_for_status()
             
-            for service_name in services:
-                try:
-                    service_url = get_service_url(service_name)
-                    response = await self.client.get(f"{service_url}/health")
-                    if response.status_code != 200:
-                        self.logger.warning(
-                            f"Service {service_name} health check failed",
-                            status_code=response.status_code,
-                        )
-                        return False
-                except Exception as e:
-                    self.logger.warning(
-                        f"Service {service_name} unreachable",
-                        error=str(e),
-                    )
-                    return False
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            result = response.json()
+            
+            # Create AttributeModelInfo
+            model_info = AttributeModelInfo(
+                service_name=service_name,
+                service_type=service_type or "unknown",
+                processing_time_ms=processing_time_ms,
+                confidence_score=result.get("confidence_score", 0.0),
+                success=result.get("success", False),
+                error_message=result.get("error_message"),
+            )
 
-            return True
+            self.logger.debug(
+                f"Service call successful for attribute '{attribute_name}'",
+                request_id=str(request_id),
+                service_name=service_name,
+                processing_time_ms=processing_time_ms,
+                confidence=result.get("confidence_score", 0.0),
+            )
 
-        except Exception:
-            return False
+            # Parse response into AttributeResponse-like object
+            from types import SimpleNamespace
+            attr_response = SimpleNamespace(
+                request_id=result["request_id"],
+                attribute_name=result["attribute_name"],
+                attribute_value=result["attribute_value"],
+                confidence_score=result["confidence_score"],
+                processing_time_ms=result["processing_time_ms"],
+                success=result["success"],
+                error_message=result.get("error_message")
+            )
+
+            return attr_response, model_info
+
+        except Exception as e:
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            
+            self.logger.error(
+                f"Service call failed for attribute '{attribute_name}'",
+                request_id=str(request_id),
+                service_name=service_name,
+                error=str(e),
+                processing_time_ms=processing_time_ms,
+            )
+            
+            raise e
 
     async def _download_and_validate_images(
         self, request_id: uuid.UUID, image_urls: list[str]
@@ -296,180 +459,56 @@ class OrchestratorService(BaseService):
             cleanup_request_directory(str(request_id))
             raise
 
-    async def _call_vision_service(
-        self, request_id: uuid.UUID, image_paths: list[str]
-    ) -> dict[str, Any]:
-        """Call vision classifier service."""
-        try:
-            service_url = get_service_url("vision_classifier")
-            
-            request_data = ServiceRequest(
-                request_id=request_id, image_paths=image_paths
-            )
-
-            response = await self.client.post(
-                f"{service_url}/extract",
-                json=request_data.model_dump(mode='json'),
-            )
-            response.raise_for_status()
-            
-            return response.json()
-
-        except Exception as e:
-            self.logger.error(
-                "Vision service call failed",
-                request_id=str(request_id),
-                error=str(e),
-            )
-            # Return error result instead of raising
-            return {
-                "request_id": str(request_id),
-                "success": False,
-                "attributes": {},
-                "confidence_scores": {},
-                "processing_time_ms": 0,
-                "error_message": str(e),
-            }
-
-    async def _call_heuristic_service(
-        self, request_id: uuid.UUID, image_paths: list[str]
-    ) -> dict[str, Any]:
-        """Call heuristic model service."""
-        try:
-            service_url = get_service_url("heuristic_model")
-            
-            request_data = ServiceRequest(
-                request_id=request_id, image_paths=image_paths
-            )
-
-            response = await self.client.post(
-                f"{service_url}/extract",
-                json=request_data.model_dump(mode='json'),
-            )
-            response.raise_for_status()
-            
-            return response.json()
-
-        except Exception as e:
-            self.logger.error(
-                "Heuristic service call failed",
-                request_id=str(request_id),
-                error=str(e),
-            )
-            return {
-                "request_id": str(request_id),
-                "success": False,
-                "attributes": {},
-                "confidence_scores": {},
-                "processing_time_ms": 0,
-                "error_message": str(e),
-            }
-
-    async def _call_llm_service(
-        self, request_id: uuid.UUID, image_paths: list[str]
-    ) -> dict[str, Any]:
-        """Call LLM service."""
-        try:
-            service_url = get_service_url("llm_model")
-            
-            request_data = ServiceRequest(
-                request_id=request_id, image_paths=image_paths
-            )
-
-            response = await self.client.post(
-                f"{service_url}/extract",
-                json=request_data.model_dump(mode='json'),
-            )
-            response.raise_for_status()
-            
-            return response.json()
-
-        except Exception as e:
-            self.logger.error(
-                "LLM service call failed",
-                request_id=str(request_id),
-                error=str(e),
-            )
-            return {
-                "request_id": str(request_id),
-                "success": False,
-                "attributes": {},
-                "confidence_scores": {},
-                "processing_time_ms": 0,
-                "error_message": str(e),
-            }
-
-    def _aggregate_results(
-        self, 
-        vision_result: dict[str, Any],
-        heuristic_result: dict[str, Any],
-        llm_result: dict[str, Any],
-    ) -> tuple[AllAttributes, dict[str, ModelInfo]]:
-        """
-        Aggregate results from all model services.
+    async def _initialize_service(self) -> None:
+        """Initialize orchestrator service."""
+        # Initialize database
+        await init_database(self.settings.database_url)
         
-        Args:
-            vision_result: Results from vision classifier
-            heuristic_result: Results from heuristic model
-            llm_result: Results from LLM service
-            
-        Returns:
-            Tuple of (aggregated_attributes, model_info)
-        """
-        # Handle service failures gracefully
-        def safe_get_attributes(result, default_class):
-            if isinstance(result, Exception) or not result.get("success", False):
-                return default_class().model_dump(), {}
-            return result.get("attributes", {}), result.get("confidence_scores", {})
+        # Ensure shared storage directory exists
+        os.makedirs(self.settings.shared_storage_path, exist_ok=True)
+        
+        # Test service connectivity
+        await self._test_service_connectivity()
 
-        vision_attrs, vision_confidence = safe_get_attributes(vision_result, VisionAttributes)
-        heuristic_attrs, heuristic_confidence = safe_get_attributes(heuristic_result, HeuristicAttributes)
-        llm_attrs, llm_confidence = safe_get_attributes(llm_result, LLMAttributes)
+    async def _cleanup_service(self) -> None:
+        """Cleanup orchestrator service."""
+        await self.client.aclose()
 
-        # Combine all attributes
-        all_attributes = AllAttributes(
-            # Vision attributes
-            **vision_attrs,
-            # Heuristic attributes
-            **heuristic_attrs,
-            # LLM attributes
-            **llm_attrs,
-        )
+    async def _check_service_health(self) -> bool:
+        """Check health of all configured services."""
+        try:
+            # Check database
+            from database import get_database_manager
+            db_manager = get_database_manager()
+            if not await db_manager.health_check():
+                return False
 
-        # Create model info
-        model_info = {
-            "vision_classifier": ModelInfo(
-                model_type="vision_classifier",
-                processing_time_ms=vision_result.get("processing_time_ms", 0),
-                confidence_scores=vision_confidence,
-                success=vision_result.get("success", False),
-                error_message=vision_result.get("error_message"),
-            ),
-            "heuristic_model": ModelInfo(
-                model_type="heuristic_model",
-                processing_time_ms=heuristic_result.get("processing_time_ms", 0),
-                confidence_scores=heuristic_confidence,
-                success=heuristic_result.get("success", False),
-                error_message=heuristic_result.get("error_message"),
-            ),
-            "llm_model": ModelInfo(
-                model_type="llm_model",
-                processing_time_ms=llm_result.get("processing_time_ms", 0),
-                confidence_scores=llm_confidence,
-                success=llm_result.get("success", False),
-                error_message=llm_result.get("error_message"),
-            ),
-        }
+            # Check configured services
+            for service_name, service_url in self.service_urls.items():
+                try:
+                    response = await self.client.get(f"{service_url}/health")
+                    if response.status_code != 200:
+                        self.logger.warning(
+                            f"Service {service_name} health check failed",
+                            status_code=response.status_code,
+                        )
+                        return False
+                except Exception as e:
+                    self.logger.warning(
+                        f"Service {service_name} unreachable",
+                        error=str(e),
+                    )
+                    return False
 
-        return all_attributes, model_info
+            return True
+
+        except Exception:
+            return False
 
     async def _test_service_connectivity(self) -> None:
-        """Test connectivity to all model services."""
-        services = ["vision_classifier", "heuristic_model", "llm_model"]
-        
-        for service_name in services:
+        """Test connectivity to all configured services."""
+        for service_name, service_url in self.service_urls.items():
             try:
-                service_url = get_service_url(service_name)
                 response = await self.client.get(f"{service_url}/health")
                 
                 if response.status_code == 200:
@@ -485,12 +524,12 @@ class OrchestratorService(BaseService):
 
 
 def create_app() -> FastAPI:
-    """Create the orchestrator FastAPI application."""
-    service = OrchestratorService()
+    """Create the capability-based orchestrator FastAPI application."""
+    service = CapabilityOrchestrator()
     return service.app
 
 
 # For development/testing
 if __name__ == "__main__":
-    service = OrchestratorService()
+    service = CapabilityOrchestrator()
     service.run()

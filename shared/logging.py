@@ -34,6 +34,8 @@ def setup_logging(service_name: str, settings=None) -> None:
         format=format_string,
         level=settings.log_level,
         serialize=serialize_logs,
+        backtrace=True,  # Include variable values in tracebacks
+        diagnose=True,   # Show extra diagnosis information
     )
 
     # Add service context - this will be included in serialized logs automatically

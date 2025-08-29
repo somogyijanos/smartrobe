@@ -47,7 +47,7 @@ class InferenceRepository:
                         name: info.model_dump(mode='json') 
                         for name, info in response.model_info.items()
                     },
-                    processing_info=response.processing_info.model_dump(mode='json'),
+                    processing_info=response.processing.model_dump(mode='json'),
                 )
 
                 session.add(db_result)
@@ -63,11 +63,7 @@ class InferenceRepository:
                 return db_result
 
         except Exception as e:
-            logger.error(
-                "Failed to store inference result",
-                result_id=str(response.id),
-                error=str(e),
-            )
+            # Let the calling service handle the logging with more context
             raise
 
     @staticmethod

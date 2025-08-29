@@ -23,6 +23,7 @@ COPY pyproject.toml uv.lock ./
 COPY shared ./shared
 COPY database ./database
 COPY orchestrator ./orchestrator
+COPY config ./config
 
 # Install dependencies
 RUN uv sync --frozen --no-dev

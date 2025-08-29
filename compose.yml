@@ -40,10 +40,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       
-      # Service URLs (all model services use same default internal port)
-      VISION_SERVICE_URL: http://vision-classifier:8000
-      HEURISTIC_SERVICE_URL: http://heuristic-model:8000
-      LLM_SERVICE_URL: http://llm-model:8000
+      # Service URLs for new capability-based services
+      HEURISTICS_SERVICE_URL: http://heuristics:8000
+      LLM_MULTIMODAL_SERVICE_URL: http://llm-multimodal:8000
+      FASHION_CLIP_SERVICE_URL: http://fashion-clip:8000
       
       # Image Processing Configuration
       MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB}
@@ -73,24 +73,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      vision-classifier:
+      heuristics:
         condition: service_healthy
-      heuristic-model:
+      llm-multimodal:
         condition: service_healthy
-      llm-model:
+      fashion-clip:
         condition: service_healthy
     networks:
       - smartrobe-network
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # MODEL SERVICES
+  # CAPABILITY-BASED MODEL SERVICES
   # ---------------------------------------------------------------------------
-  vision-classifier:
+  heuristics:
     build:
       context: .
-      dockerfile: Dockerfile.vision
-    container_name: smartrobe-vision-classifier
+      dockerfile: Dockerfile.heuristics
+    container_name: smartrobe-heuristics
     environment:
       # Only what this service actually needs
       SHARED_STORAGE_PATH: ${SHARED_STORAGE_PATH}
@@ -99,7 +99,7 @@ services:
       DEBUG: ${DEBUG}
       ENVIRONMENT: ${ENVIRONMENT}
     ports:
-      - "${VISION_EXTERNAL_PORT}:8000"
+      - "${HEURISTICS_EXTERNAL_PORT}:8000"
     volumes:
       - shared_storage:${SHARED_STORAGE_PATH}
     healthcheck:
@@ -112,11 +112,11 @@ services:
       - smartrobe-network
     restart: unless-stopped
 
-  heuristic-model:
+  llm-multimodal:
     build:
       context: .
-      dockerfile: Dockerfile.heuristic
-    container_name: smartrobe-heuristic-model
+      dockerfile: Dockerfile.llm_multimodal
+    container_name: smartrobe-llm-multimodal
     environment:
       # Only what this service actually needs
       SHARED_STORAGE_PATH: ${SHARED_STORAGE_PATH}
@@ -125,7 +125,7 @@ services:
       DEBUG: ${DEBUG}
       ENVIRONMENT: ${ENVIRONMENT}
     ports:
-      - "${HEURISTIC_EXTERNAL_PORT}:8000"
+      - "${LLM_MULTIMODAL_EXTERNAL_PORT}:8000"
     volumes:
       - shared_storage:${SHARED_STORAGE_PATH}
     healthcheck:
@@ -138,11 +138,11 @@ services:
       - smartrobe-network
     restart: unless-stopped
 
-  llm-model:
+  fashion-clip:
     build:
       context: .
-      dockerfile: Dockerfile.llm
-    container_name: smartrobe-llm-model
+      dockerfile: Dockerfile.fashion_clip
+    container_name: smartrobe-fashion-clip
     environment:
       # Only what this service actually needs
       SHARED_STORAGE_PATH: ${SHARED_STORAGE_PATH}
@@ -151,7 +151,7 @@ services:
       DEBUG: ${DEBUG}
       ENVIRONMENT: ${ENVIRONMENT}
     ports:
-      - "${LLM_EXTERNAL_PORT}:8000"
+      - "${FASHION_CLIP_EXTERNAL_PORT}:8000"
     volumes:
       - shared_storage:${SHARED_STORAGE_PATH}
     healthcheck:

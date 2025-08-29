@@ -174,32 +174,7 @@ class Condition(str, Enum):
 # =============================================================================
 
 
-class VisionAttributes(BaseModel):
-    """Attributes extracted by vision classifier service."""
 
-    category: ClothingCategory | None = None
-    gender: Gender | None = None
-    sleeve_length: SleeveLength | None = None
-    neckline: Neckline | None = None
-    closure_type: ClosureType | None = None
-    fit: Fit | None = None
-
-
-class HeuristicAttributes(BaseModel):
-    """Attributes extracted by heuristic model service."""
-
-    color: Color | None = None
-    material: Material | None = None
-    pattern: Pattern | None = None
-    brand: str | None = None
-
-
-class LLMAttributes(BaseModel):
-    """Attributes extracted by LLM service."""
-
-    style: Style | None = None
-    season: Season | None = None
-    condition: Condition | None = None
 
 
 class AllAttributes(BaseModel):
@@ -226,6 +201,32 @@ class AllAttributes(BaseModel):
 
 
 # =============================================================================
+# NEW CAPABILITY-BASED MODELS
+# =============================================================================
+
+
+class AttributeRequest(BaseModel):
+    """Request for a specific attribute extraction."""
+
+    request_id: UUID
+    attribute_name: str
+    image_paths: list[str] = Field(..., min_items=1, max_items=4)
+
+
+class AttributeResponse(BaseModel):
+    """Response for individual attribute extraction."""
+
+    request_id: UUID
+    attribute_name: str
+    attribute_value: Any | None
+    confidence_score: float
+    processing_time_ms: int
+    success: bool
+    error_message: str | None = None
+
+
+
+# =============================================================================
 # SERVICE COMMUNICATION MODELS
 # =============================================================================
 
@@ -248,22 +249,7 @@ class ServiceResponse(BaseModel):
     error_message: str | None = None
 
 
-class VisionServiceResponse(ServiceResponse):
-    """Response from vision classifier service."""
 
-    attributes: VisionAttributes
-
-
-class HeuristicServiceResponse(ServiceResponse):
-    """Response from heuristic model service."""
-
-    attributes: HeuristicAttributes
-
-
-class LLMServiceResponse(ServiceResponse):
-    """Response from LLM service."""
-
-    attributes: LLMAttributes
 
 
 # =============================================================================
@@ -285,13 +271,14 @@ class AnalyzeRequest(BaseModel):
         return v
 
 
-class ModelInfo(BaseModel):
-    """Information about model processing."""
+class AttributeModelInfo(BaseModel):
+    """Information about model processing for a specific attribute."""
 
-    model_type: str
+    service_name: str  # e.g. "heuristics", "llm_multimodal", "fashion_clip"
+    service_type: str  # e.g. "heuristic", "llm", "pre_trained_vision"
     version: str = "1.0.0"
     processing_time_ms: int
-    confidence_scores: dict[str, float] = {}
+    confidence_score: float
     success: bool
     error_message: str | None = None
 
@@ -302,18 +289,19 @@ class ProcessingInfo(BaseModel):
     request_id: UUID
     total_processing_time_ms: int
     image_download_time_ms: int
-    parallel_processing: bool = True
     timestamp: datetime
     image_count: int
+    implemented_attributes: list[str] = []  # Successfully extracted attributes
+    skipped_attributes: list[str] = []  # Attributes skipped due to no implementation
 
 
 class AnalyzeResponse(BaseModel):
     """API response for item analysis."""
 
     id: UUID = Field(default_factory=uuid4)
-    attributes: AllAttributes
-    model_info: dict[str, ModelInfo]
-    processing_info: ProcessingInfo
+    attributes: AllAttributes  # All 13 attributes, some may be None if not implemented
+    model_info: dict[str, AttributeModelInfo]  # attribute_name -> model info
+    processing: ProcessingInfo  # Renamed from processing_info
 
 
 # =============================================================================
@@ -327,8 +315,8 @@ class InferenceResult(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     request_data: dict[str, Any]
     attributes: AllAttributes
-    model_info: dict[str, ModelInfo]
-    processing_info: ProcessingInfo
+    model_info: dict[str, AttributeModelInfo]
+    processing: ProcessingInfo
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

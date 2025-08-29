@@ -67,10 +67,10 @@ class OrchestratorSettings(BaseSettings):
     # Service Configuration 
     orchestrator_port: int = 8000  # Same internal port as others
     
-    # Service URLs for inter-service communication
-    vision_service_url: str
-    heuristic_service_url: str
-    llm_service_url: str
+    # Service URLs for inter-service communication (new capability-based services)
+    heuristics_service_url: str
+    llm_multimodal_service_url: str
+    fashion_clip_service_url: str
 
     # Image Processing
     max_image_size_mb: int
@@ -107,9 +107,9 @@ class OrchestratorSettings(BaseSettings):
     def get_service_url(self, service_name: str) -> str:
         """Get the URL for a specific service."""
         url_mapping = {
-            "vision_classifier": self.vision_service_url,
-            "heuristic_model": self.heuristic_service_url,
-            "llm_model": self.llm_service_url,
+            "heuristics": self.heuristics_service_url,
+            "llm_multimodal": self.llm_multimodal_service_url,
+            "fashion_clip": self.fashion_clip_service_url,
         }
         
         url = url_mapping.get(service_name)
@@ -154,9 +154,9 @@ def get_orchestrator_settings() -> OrchestratorSettings:
             postgres_password=os.environ["POSTGRES_PASSWORD"],
             postgres_db=os.environ["POSTGRES_DB"],
             orchestrator_port=int(os.environ.get("ORCHESTRATOR_PORT", "8000")),
-            vision_service_url=os.environ["VISION_SERVICE_URL"],
-            heuristic_service_url=os.environ["HEURISTIC_SERVICE_URL"],
-            llm_service_url=os.environ["LLM_SERVICE_URL"],
+            heuristics_service_url=os.environ["HEURISTICS_SERVICE_URL"],
+            llm_multimodal_service_url=os.environ["LLM_MULTIMODAL_SERVICE_URL"],
+            fashion_clip_service_url=os.environ["FASHION_CLIP_SERVICE_URL"],
             shared_storage_path=os.environ["SHARED_STORAGE_PATH"],
             max_image_size_mb=int(os.environ["MAX_IMAGE_SIZE_MB"]),
             allowed_image_formats=parse_formats(os.environ["ALLOWED_IMAGE_FORMATS"]),

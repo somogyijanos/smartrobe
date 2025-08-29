@@ -230,101 +230,129 @@ class BaseService(ABC):
         )
 
 
-class ModelService(BaseService):
-    """Base class for model services (vision, heuristic, LLM)."""
+class CapabilityService(BaseService):
+    """Base class for capability-aware model services."""
 
-    def __init__(self, service_name: str, model_type: str, version: str = "1.0.0"):
-        self.model_type = model_type
-        # Pass model service settings to base class
+    # Subclasses should define their supported attributes
+    SUPPORTED_ATTRIBUTES: dict[str, type] = {}
+    SERVICE_TYPE: str = ""
+
+    def __init__(self, service_name: str, service_type: str, version: str = "1.0.0"):
+        self.service_type = service_type
         super().__init__(service_name, version, settings=get_model_service_settings())
 
     @abstractmethod
-    async def extract_attributes(
-        self, request_id: str, image_paths: list[str]
-    ) -> dict[str, Any]:
+    async def extract_single_attribute(
+        self, request_id: str, attribute_name: str, image_paths: list[str]
+    ) -> tuple[Any, float]:
         """
-        Extract attributes from images.
+        Extract a single attribute from images.
 
         Args:
             request_id: Unique request identifier
+            attribute_name: Name of the attribute to extract
             image_paths: List of paths to images
 
         Returns:
-            Dictionary of extracted attributes
+            Tuple of (attribute_value, confidence_score)
         """
         pass
 
-    @abstractmethod
-    def get_confidence_scores(self, attributes: dict[str, Any]) -> dict[str, float]:
-        """
-        Get confidence scores for extracted attributes.
-
-        Args:
-            attributes: Extracted attributes
-
-        Returns:
-            Dictionary of confidence scores
-        """
-        pass
+    def get_supported_attributes(self) -> list[str]:
+        """Get list of supported attributes."""
+        return list(self.SUPPORTED_ATTRIBUTES.keys())
 
     def _add_routes(self, app: FastAPI) -> None:
-        """Add model service routes."""
-        from .schemas import ServiceRequest, ServiceResponse
+        """Add capability-aware routes."""
+        from .schemas import AttributeResponse
 
-        @app.post("/extract", response_model=ServiceResponse)
-        async def extract_attributes_endpoint(
-            request: ServiceRequest,
-        ) -> ServiceResponse:
-            """Extract attributes from images."""
+        # Add individual attribute endpoints
+        for attr_name in self.SUPPORTED_ATTRIBUTES.keys():
+            endpoint_path = f"/extract/{attr_name}"
+            endpoint_func = self._create_attribute_endpoint(attr_name)
+            app.add_api_route(
+                endpoint_path,
+                endpoint_func,
+                methods=["POST"],
+                response_model=AttributeResponse,
+                name=f"extract_{attr_name}"
+            )
+
+        # Add capabilities endpoint
+        @app.get("/capabilities")
+        async def get_capabilities():
+            """Get service capabilities."""
+            return {
+                "service_name": self.service_name,
+                "service_type": self.service_type,
+                "supported_attributes": self.get_supported_attributes(),
+                "version": self.version,
+                "endpoints": [
+                    f"/extract/{attr}" for attr in self.get_supported_attributes()
+                ]
+            }
+
+    def _create_attribute_endpoint(self, attribute_name: str):
+        """Create an endpoint function for a specific attribute."""
+        from .schemas import AttributeRequest, AttributeResponse
+
+        async def extract_attribute_endpoint(
+            request: AttributeRequest,
+        ) -> AttributeResponse:
+            """Extract a specific attribute from images."""
             start_time = time.time()
 
             try:
                 self.logger.info(
-                    "Attribute extraction request received",
+                    f"Attribute '{attribute_name}' extraction request received",
                     request_id=str(request.request_id),
+                    attribute=attribute_name,
                     image_count=len(request.image_paths),
                 )
 
-                # Extract attributes
-                attributes = await self.extract_attributes(
-                    str(request.request_id), request.image_paths
+                # Extract the specific attribute
+                attribute_value, confidence_score = await self.extract_single_attribute(
+                    str(request.request_id), attribute_name, request.image_paths
                 )
-
-                # Get confidence scores
-                confidence_scores = self.get_confidence_scores(attributes)
 
                 processing_time_ms = int((time.time() - start_time) * 1000)
 
                 self.logger.info(
-                    "Attribute extraction completed",
+                    f"Attribute '{attribute_name}' extraction completed",
                     request_id=str(request.request_id),
+                    attribute=attribute_name,
                     processing_time_ms=processing_time_ms,
-                    attribute_count=len(attributes),
+                    confidence_score=confidence_score,
                 )
 
-                return ServiceResponse(
+                return AttributeResponse(
                     request_id=request.request_id,
-                    success=True,
-                    attributes=attributes,
-                    confidence_scores=confidence_scores,
+                    attribute_name=attribute_name,
+                    attribute_value=attribute_value,
+                    confidence_score=confidence_score,
                     processing_time_ms=processing_time_ms,
+                    success=True,
                 )
 
             except Exception as e:
                 processing_time_ms = int((time.time() - start_time) * 1000)
 
                 self.logger.error(
-                    "Attribute extraction failed",
+                    f"Attribute '{attribute_name}' extraction failed",
                     request_id=str(request.request_id),
+                    attribute=attribute_name,
                     error=str(e),
                     processing_time_ms=processing_time_ms,
                 )
 
-                return ServiceResponse(
+                return AttributeResponse(
                     request_id=request.request_id,
-                    success=False,
-                    attributes={},
-                    confidence_scores={},
+                    attribute_name=attribute_name,
+                    attribute_value=None,
+                    confidence_score=0.0,
                     processing_time_ms=processing_time_ms,
+                    success=False,
                     error_message=str(e),
                 )
+
+        return extract_attribute_endpoint
