@@ -211,6 +211,10 @@ def create_app():
     return service.app
 
 
+# Create app instance for uvicorn
+app = create_app()
+
+
 # For development/testing
 if __name__ == "__main__":
     service = FashionClipService()

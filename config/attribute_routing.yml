@@ -37,21 +37,41 @@ attribute_mappings:
 # - condition
 
 # Service configuration
+# Note: Future preprocessing services can be added here:
+# - segmentation_sam (SAM-based segmentation)
+# - segmentation_yolo (YOLO-based segmentation) 
+# - pose_estimation (human pose detection)
+# - color_correction (image enhancement)
+# etc.
 services:
+  - name: "segmentation_rembg"
+    type: "vision_classifier"
+    timeout_seconds: 30
+    
   - name: "heuristics"
     type: "heuristic"
-    url: "http://heuristics:8000"
     timeout_seconds: 30
+    segmentation_enabled: false  # Color detection works fine on full images
     
   - name: "llm_multimodal"
     type: "llm"
-    url: "http://llm-multimodal:8000"
     timeout_seconds: 45
+    segmentation_enabled: true   # Context reasoning benefits from clean garment images
     
   - name: "fashion_clip"
     type: "pre_trained_vision"
-    url: "http://fashion-clip:8000"
     timeout_seconds: 20
+    segmentation_enabled: true   # Better neckline detection on segmented garments
+
+# Segmentation configuration
+# Note: This is specific to rembg segmentation. Future segmentation services
+# would have their own config sections (e.g., segmentation_sam_config, etc.)
+segmentation_config:
+  enabled: true
+  fallback_to_original: true  # Use original images if segmentation fails
+  output_format: "png"        # Preserve transparency for better results
+  model: "u2net"              # Default rembg model (u2net, silueta, etc.)
+  concurrent_limit: 3         # Max concurrent segmentation operations
 
 # Routing behavior
 routing_config:

@@ -310,9 +310,19 @@ class CapabilityService(BaseService):
                     image_count=len(request.image_paths),
                 )
 
+                # Determine which image paths to use
+                image_paths_to_use = request.image_paths
+                if request.use_segmented and request.segmented_image_paths:
+                    image_paths_to_use = request.segmented_image_paths
+                    self.logger.debug(
+                        f"Using segmented images for {attribute_name}",
+                        request_id=str(request.request_id),
+                        segmented_count=len(request.segmented_image_paths),
+                    )
+
                 # Extract the specific attribute
                 attribute_value, confidence_score = await self.extract_single_attribute(
-                    str(request.request_id), attribute_name, request.image_paths
+                    str(request.request_id), attribute_name, image_paths_to_use
                 )
 
                 processing_time_ms = int((time.time() - start_time) * 1000)

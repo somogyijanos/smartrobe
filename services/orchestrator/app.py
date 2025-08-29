@@ -18,7 +18,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from PIL import Image
 
-from database import InferenceRepository, init_database
+from shared.database import InferenceRepository, init_database
 from shared.base_service import BaseService
 from shared.config import create_request_directory, cleanup_request_directory, get_settings
 from shared.schemas import (
@@ -28,6 +28,8 @@ from shared.schemas import (
     AttributeModelInfo,
     AttributeRequest,
     ProcessingInfo,
+    SegmentationRequest,
+    SegmentationResponse,
 )
 
 
@@ -57,7 +59,7 @@ class CapabilityOrchestrator(BaseService):
 
     def _load_attribute_config(self) -> dict[str, Any]:
         """Load attribute routing configuration from YAML file."""
-        config_path = Path(__file__).parent.parent / "config" / "attribute_routing.yml"
+        config_path = Path(__file__).parent.parent.parent / "config" / "attribute_routing.yml"
         
         try:
             with open(config_path, 'r') as f:
@@ -89,17 +91,19 @@ class CapabilityOrchestrator(BaseService):
             }
 
     def _build_service_url_mapping(self) -> dict[str, str]:
-        """Build mapping of service names to their URLs."""
-        url_mapping = {}
-        
-        for service in self.attribute_config.get("services", []):
-            service_name = service["name"]
-            service_url = service["url"]
-            url_mapping[service_name] = service_url
+        """Build mapping of service names to their URLs from environment variables."""
+        # Use environment variables for service URLs (12-factor app approach)
+        url_mapping = {
+            "heuristics": self.settings.heuristics_service_url,
+            "llm_multimodal": self.settings.llm_multimodal_service_url,
+            "fashion_clip": self.settings.fashion_clip_service_url,
+            "segmentation_rembg": self.settings.segmentation_rembg_service_url,
+        }
             
         self.logger.info(
-            "Service URL mapping built",
-            services=list(url_mapping.keys())
+            "Service URL mapping built from environment variables",
+            services=list(url_mapping.keys()),
+            urls=list(url_mapping.values())
         )
         
         return url_mapping
@@ -133,7 +137,7 @@ class CapabilityOrchestrator(BaseService):
                 )
                 download_time_ms = int((time.time() - download_start) * 1000)
 
-                # Route attributes to services
+                # Route attributes to services (includes parallel segmentation)
                 processing_start = time.time()
                 
                 attributes, model_info = await self._route_attributes_to_services(
@@ -209,21 +213,28 @@ class CapabilityOrchestrator(BaseService):
                 )
 
             finally:
-                # Cleanup request directory
-                try:
-                    cleanup_request_directory(str(request_id))
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to cleanup request directory",
+                # Cleanup request directory (unless debug mode retains images)
+                if not self.settings.debug_retain_images:
+                    try:
+                        cleanup_request_directory(str(request_id))
+                    except Exception as e:
+                        self.logger.warning(
+                            "Failed to cleanup request directory",
+                            request_id=str(request_id),
+                            error=str(e),
+                        )
+                else:
+                    self.logger.info(
+                        "Debug mode: retaining images in request directory",
                         request_id=str(request_id),
-                        error=str(e),
+                        directory=f"{self.settings.shared_storage_path}/{request_id}",
                     )
 
     async def _route_attributes_to_services(
         self, request_id: uuid.UUID, image_paths: list[str]
     ) -> tuple[AllAttributes, dict[str, AttributeModelInfo]]:
         """
-        Route attributes to their configured services and collect results.
+        Route attributes to their configured services with parallel segmentation.
         
         Returns:
             Tuple of (attributes, model_info)
@@ -241,28 +252,38 @@ class CapabilityOrchestrator(BaseService):
                 unimplemented_attrs.append(attr)
 
         self.logger.info(
-            "Routing attributes to services",
+            "Routing attributes to services with segmentation support",
             request_id=str(request_id),
             implemented=implemented_attrs,
             unimplemented=unimplemented_attrs,
         )
 
-        # Create tasks for implemented attributes
-        tasks = []
+        # Check if segmentation is needed for any services
+        segmentation_needed = self._check_segmentation_needed(implemented_attrs)
+        
+        # Handle segmentation first if needed
+        segmentation_response = None
+        if segmentation_needed:
+            segmentation_response = await self._call_segmentation_service(request_id, image_paths)
+        
+        # Start attribute extraction tasks with segmentation result
+        attr_tasks = []
         for attr in implemented_attrs:
             service_name = attribute_mappings[attr]
-            task = self._call_attribute_service(request_id, attr, service_name, image_paths)
-            tasks.append(task)
+            task = self._call_attribute_service_with_segmentation(
+                request_id, attr, service_name, image_paths, segmentation_response
+            )
+            attr_tasks.append(task)
 
-        # Execute all attribute extractions in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Execute all attribute extraction tasks in parallel
+        attr_results = await asyncio.gather(*attr_tasks, return_exceptions=True)
 
         # Process results
         attribute_values = {}
         model_info = {}
 
         # Handle implemented attributes
-        for i, (attr, result) in enumerate(zip(implemented_attrs, results)):
+        for i, (attr, result) in enumerate(zip(implemented_attrs, attr_results)):
             if isinstance(result, Exception):
                 self.logger.error(
                     f"Attribute extraction failed for {attr}",
@@ -285,8 +306,190 @@ class CapabilityOrchestrator(BaseService):
 
         return attributes, model_info
 
+    def _check_segmentation_needed(self, implemented_attrs: list[str]) -> bool:
+        """
+        Check if segmentation is needed for any of the implemented attributes.
+        
+        Args:
+            implemented_attrs: List of attributes to be extracted
+            
+        Returns:
+            True if segmentation is needed, False otherwise
+        """
+        segmentation_config = self.attribute_config.get("segmentation_config", {})
+        if not segmentation_config.get("enabled", False):
+            return False
+        
+        attribute_mappings = self.attribute_config["attribute_mappings"]
+        
+        for attr in implemented_attrs:
+            service_name = attribute_mappings[attr]
+            # Check if the service for this attribute has segmentation enabled
+            for service in self.attribute_config["services"]:
+                if service["name"] == service_name:
+                    if service.get("segmentation_enabled", False):
+                        self.logger.debug(
+                            f"Segmentation needed for attribute '{attr}' (service: {service_name})"
+                        )
+                        return True
+        
+        return False
+
+    async def _call_segmentation_service(
+        self, request_id: uuid.UUID, image_paths: list[str]
+    ) -> SegmentationResponse:
+        """
+        Call the segmentation service to segment images.
+        
+        Args:
+            request_id: Unique request identifier
+            image_paths: List of paths to original images
+            
+        Returns:
+            SegmentationResponse with segmented image paths
+        """
+        segmentation_config = self.attribute_config.get("segmentation_config", {})
+        
+        # Get segmentation service URL from environment variables  
+        segmentation_url = self.service_urls.get("segmentation_rembg")
+        if not segmentation_url:
+            raise ValueError("Segmentation service URL not found in environment variables")
+
+        endpoint_url = f"{segmentation_url}/segment"
+        
+        request_data = SegmentationRequest(
+            request_id=request_id,
+            image_paths=image_paths,
+            model=segmentation_config.get("model", "u2net"),
+            output_format=segmentation_config.get("output_format", "png"),
+        )
+
+        self.logger.info(
+            "Calling segmentation service",
+            request_id=str(request_id),
+            endpoint_url=endpoint_url,
+            image_count=len(image_paths),
+        )
+
+        start_time = time.time()
+        
+        try:
+            response = await self.client.post(
+                endpoint_url,
+                json=request_data.model_dump(mode='json'),
+            )
+            response.raise_for_status()
+            
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            result = response.json()
+            
+            segmentation_response = SegmentationResponse(**result)
+            
+            successful_count = sum(segmentation_response.success_mask)
+            self.logger.info(
+                "Segmentation service call completed",
+                request_id=str(request_id),
+                successful_segmentations=successful_count,
+                total_images=len(image_paths),
+                processing_time_ms=processing_time_ms,
+            )
+
+            return segmentation_response
+
+        except Exception as e:
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            
+            self.logger.error(
+                "Segmentation service call failed",
+                request_id=str(request_id),
+                error=str(e),
+                processing_time_ms=processing_time_ms,
+            )
+            
+            # Return fallback response with original images
+            return SegmentationResponse(
+                request_id=request_id,
+                original_paths=image_paths,
+                segmented_paths=image_paths,  # Fallback to originals
+                success_mask=[False] * len(image_paths),
+                processing_time_ms=processing_time_ms,
+                success=False,
+                error_message=str(e),
+            )
+
+    async def _call_attribute_service_with_segmentation(
+        self, 
+        request_id: uuid.UUID, 
+        attribute_name: str, 
+        service_name: str, 
+        image_paths: list[str], 
+        segmentation_response: SegmentationResponse | None
+    ) -> tuple[Any, AttributeModelInfo]:
+        """
+        Call an attribute service with optional segmented images.
+        
+        Args:
+            request_id: Unique request identifier
+            attribute_name: Name of the attribute to extract
+            service_name: Name of the service to call
+            image_paths: List of paths to original images
+            segmentation_response: Optional segmentation response (if segmentation was performed)
+            
+        Returns:
+            Tuple of (AttributeResponse, AttributeModelInfo)
+        """
+        # Check if this service needs segmentation
+        service_needs_segmentation = False
+        for service in self.attribute_config["services"]:
+            if service["name"] == service_name:
+                service_needs_segmentation = service.get("segmentation_enabled", False)
+                break
+
+        # Determine which image paths to use
+        segmented_image_paths = None
+        use_segmented = False
+        
+        if service_needs_segmentation and segmentation_response:
+            if segmentation_response.success:
+                # Use mixed mode: segmented where available, original as fallback
+                mixed_paths = []
+                for i, (original, segmented, success) in enumerate(zip(
+                    segmentation_response.original_paths,
+                    segmentation_response.segmented_paths,
+                    segmentation_response.success_mask
+                )):
+                    mixed_paths.append(segmented if success else original)
+                
+                segmented_image_paths = mixed_paths
+                use_segmented = True
+                
+                self.logger.debug(
+                    f"Using segmented images for {attribute_name}",
+                    request_id=str(request_id),
+                    successful_segmentations=sum(segmentation_response.success_mask),
+                    total_images=len(image_paths),
+                )
+            else:
+                self.logger.warning(
+                    f"Segmentation failed for {attribute_name}, using original images",
+                    request_id=str(request_id),
+                    error=segmentation_response.error_message,
+                )
+
+        # Call the attribute service
+        return await self._call_attribute_service(
+            request_id, attribute_name, service_name, image_paths, 
+            segmented_image_paths, use_segmented
+        )
+
     async def _call_attribute_service(
-        self, request_id: uuid.UUID, attribute_name: str, service_name: str, image_paths: list[str]
+        self, 
+        request_id: uuid.UUID, 
+        attribute_name: str, 
+        service_name: str, 
+        image_paths: list[str],
+        segmented_image_paths: list[str] | None = None,
+        use_segmented: bool = False
     ) -> tuple[Any, AttributeModelInfo]:
         """
         Call a specific service for a single attribute.
@@ -310,7 +513,9 @@ class CapabilityOrchestrator(BaseService):
         request_data = AttributeRequest(
             request_id=request_id,
             attribute_name=attribute_name,
-            image_paths=image_paths
+            image_paths=image_paths,
+            segmented_image_paths=segmented_image_paths,
+            use_segmented=use_segmented
         )
 
         self.logger.debug(
@@ -455,8 +660,9 @@ class CapabilityOrchestrator(BaseService):
             return image_paths
 
         except Exception:
-            # Cleanup on failure
-            cleanup_request_directory(str(request_id))
+            # Cleanup on failure (unless debug mode retains images)
+            if not self.settings.debug_retain_images:
+                cleanup_request_directory(str(request_id))
             raise
 
     async def _initialize_service(self) -> None:
@@ -478,7 +684,7 @@ class CapabilityOrchestrator(BaseService):
         """Check health of all configured services."""
         try:
             # Check database
-            from database import get_database_manager
+            from shared.database import get_database_manager
             db_manager = get_database_manager()
             if not await db_manager.health_check():
                 return False
@@ -527,6 +733,10 @@ def create_app() -> FastAPI:
     """Create the capability-based orchestrator FastAPI application."""
     service = CapabilityOrchestrator()
     return service.app
+
+
+# Create app instance for uvicorn
+app = create_app()
 
 
 # For development/testing

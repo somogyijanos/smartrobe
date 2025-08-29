@@ -1,0 +1,25 @@
+[project]
+name = "smartrobe-llm-multimodal"
+version = "0.1.0"
+description = "LLM multimodal service - contextual attribute extraction using language models"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "pydantic",
+    "pillow",
+    "loguru",
+    "python-multipart",
+    # Add LLM-specific dependencies here when needed
+    # "openai",
+    # "transformers",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["*.py"]

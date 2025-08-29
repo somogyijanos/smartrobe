@@ -211,6 +211,8 @@ class AttributeRequest(BaseModel):
     request_id: UUID
     attribute_name: str
     image_paths: list[str] = Field(..., min_items=1, max_items=4)
+    segmented_image_paths: list[str] | None = None  # Optional segmented versions
+    use_segmented: bool = False  # Whether service should prefer segmented images
 
 
 class AttributeResponse(BaseModel):
@@ -220,6 +222,27 @@ class AttributeResponse(BaseModel):
     attribute_name: str
     attribute_value: Any | None
     confidence_score: float
+    processing_time_ms: int
+    success: bool
+    error_message: str | None = None
+
+
+class SegmentationRequest(BaseModel):
+    """Request for image segmentation."""
+
+    request_id: UUID
+    image_paths: list[str] = Field(..., min_items=1, max_items=4)
+    model: str | None = None  # rembg model to use, defaults to u2net
+    output_format: str = "png"  # Output format, png preserves transparency
+
+
+class SegmentationResponse(BaseModel):
+    """Response from segmentation service."""
+
+    request_id: UUID
+    original_paths: list[str]
+    segmented_paths: list[str]
+    success_mask: list[bool]  # Which segmentations succeeded
     processing_time_ms: int
     success: bool
     error_message: str | None = None

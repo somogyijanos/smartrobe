@@ -5,3 +5,5 @@ __pycache__
 .venv
 test-images/*
 !test-images/public-vinted
+local_storage
+postgres_data

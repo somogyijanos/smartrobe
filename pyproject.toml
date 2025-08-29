@@ -3,46 +3,21 @@ name = "smartrobe"
 version = "0.1.0"
 description = "Multi-Model Attribute Extraction Service for Second-Hand Clothing"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
-    # Core Framework
-    "fastapi",
-    "uvicorn[standard]",
-    # Database
-    "sqlalchemy[asyncio]",
-    "asyncpg",
-    # Data Validation & Serialization
-    "pydantic",
-    # HTTP Client & Image Processing
-    "httpx",
-    "pillow",
-    # Logging & Utilities
-    "loguru",
-    "python-multipart",
-    "python-dotenv",
-    "aiohttp>=3.12.15",
-    "aiofiles>=24.1.0",
-    "typer",
+    # Utility scripts dependencies
+    "typer",  # for scripts/validate_image_urls.py
 ]
 
 [project.optional-dependencies]
 dev = [
-    "ruff",
-    "pytest",
-    "httpx",  # for testing
-]
-
-[tool.uv.workspace]
-members = [
-    "orchestrator",
-    "services/vision_classifier", 
-    "services/heuristic_model",
-    "services/llm_model",
-    "shared"
+    "ruff",     # linting & formatting
+    "pytest",   # testing framework
+    "httpx",    # for integration tests
 ]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py310"
 line-length = 88
 
 [tool.ruff.lint]
@@ -55,7 +30,3 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
 ]
-
-
-
-

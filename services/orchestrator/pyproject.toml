@@ -1,7 +1,7 @@
 [project]
 name = "smartrobe-orchestrator"
 version = "0.1.0"
-description = "Main orchestrator service for Smartrobe - coordinates image processing across model services"
+description = "Main orchestrator service - coordinates image processing across model services"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
@@ -19,3 +19,7 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["*.py"]
