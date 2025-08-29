@@ -3,3 +3,5 @@ __pycache__
 .DS_Store
 .ruff_cache
 .venv
+test-images/*
+!test-images/public-vinted

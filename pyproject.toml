@@ -8,22 +8,21 @@ dependencies = [
     # Core Framework
     "fastapi",
     "uvicorn[standard]",
-    
     # Database
     "sqlalchemy[asyncio]",
     "asyncpg",
-    
     # Data Validation & Serialization
     "pydantic",
-    
     # HTTP Client & Image Processing
     "httpx",
     "pillow",
-    
     # Logging & Utilities
     "loguru",
     "python-multipart",
     "python-dotenv",
+    "aiohttp>=3.12.15",
+    "aiofiles>=24.1.0",
+    "typer",
 ]
 
 [project.optional-dependencies]
