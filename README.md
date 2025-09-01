@@ -1,209 +1,278 @@
 # 🧥 Smartrobe - Multi-Model Attribute Extraction Service
 
-A high-performance microservices system that analyzes clothing images using multiple AI models to extract comprehensive product attributes for second-hand clothing marketplaces.
+A microservices prototype for extracting clothing attributes from images using multiple models.
 
-## 🎯 Overview
+## 🎯 What It Does
 
-Smartrobe processes 1-4 photos of clothing items and extracts 13 different attributes using three specialized model types:
+Smartrobe takes 1-4 clothing photos and extracts attributes using different model types, for example:
 
-- **Vision Classifier**: Analyzes visual patterns for category, gender, sleeve length, neckline, closure type, and fit
-- **Heuristic Model**: Uses rule-based algorithms for color, material, pattern, and brand detection  
-- **LLM Model**: Leverages language model reasoning for style, season, and condition assessment
+- **Fashion-CLIP**: Category classification (vision model)
+- **Heuristics**: Color detection using clustering and color mapping (rule-based)  
+- **LLM-Multimodal**: Condition assessment using OpenAI GPT-4o
+- **Microsoft-Florence**: Image classification (close-up vs entire garment) and brand extraction via OCR (vision model)
 
-### Key Features
+### Current Status
 
-- 🚀 **REST API**: Single endpoint `/v1/items/analyze` for complete item analysis
-- 🔄 **Parallel Processing**: All models process images simultaneously for optimal performance
-- 💾 **Database Persistence**: PostgreSQL storage of all inference results
-- 🐳 **Containerized**: Docker-based microservices architecture
-- 📊 **Comprehensive Monitoring**: Health checks and structured JSON logging
-- ⚡ **High Performance**: Target response time of 2-8 seconds
+**✅ What's Working:**
+- Full microservices architecture with Docker
+- Smart image classification (close-up vs entire garment)
+- 4 out of 13 attributes implemented: `color`, `category`, `condition`, `brand`
+- Parallel processing with graceful error handling
+- PostgreSQL persistence with JSONB storage
+- Comprehensive logging and health checks
+
+**⚠️ What's Missing:**
+- 9 remaining attributes (gender, sleeve_length, neckline, closure_type, fit, material, pattern, style, season)
+- Production-ready error handling
+- Authentication/authorization?
+- Rate limiting
+- Performance optimization, better concurrency handling
+- Using cloud storage instead of local filesystem, e.g. S3 or GCS
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Load Balancer │───▶│   Orchestrator   │───▶│   PostgreSQL    │
-│                 │    │    (Port 8000)   │    │    Database     │
-└─────────────────┘    └──────────┬───────┘    └─────────────────┘
-                                  │
-                    ┌─────────────┼─────────────┐
-                    │             │             │
-                    ▼             ▼             ▼
-            ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-            │ Vision Class. │ │ Heuristic     │ │ LLM Model     │
-            │ (Port 8001)   │ │ (Port 8002)   │ │ (Port 8003)   │
-            └───────────────┘ └───────────────┘ └───────────────┘
-                    │             │             │
-                    └─────────────┼─────────────┘
-                                  ▼
-                        ┌─────────────────┐
-                        │ Shared Storage  │
-                        │    Volume       │
-                        └─────────────────┘
+5 containerized services with shared file storage:
+
+```mermaid
+graph TD
+    C["REST Client"] --> O["Orchestrator<br/>(Port 8000)"]
+    O --> DB[("PostgreSQL<br/>(Port 5432)")]
+    
+    O --> H["Heuristics<br/>(Port 8010)"]
+    O --> LLM["LLM-Multimodal<br/>(Port 8011)"]
+    O --> FC["Fashion-CLIP<br/>(Port 8012)"]
+    O --> MF["Microsoft-Florence<br/>(Port 8013)"]
+    
+    H --> S
+    LLM --> S
+    FC --> S[("Shared Storage<br/>./local_storage")]
+    MF --> S
+    O --> S
 ```
 
-## 🚀 Quick Start
+### Data Flow
+
+Smart image processing with parallel attribute extraction:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant O as Orchestrator
+    participant FC as Fashion-CLIP
+    participant H as Heuristics
+    participant LLM as LLM-Multimodal
+    participant MF as Microsoft-Florence
+    participant S as Shared Storage
+    participant DB as PostgreSQL
+
+    C->>O: POST /v1/items/analyze<br/>{4 image URLs}
+    O->>O: Generate request ID
+    O->>S: Download & store images
+    S-->>O: Local image paths
+    
+    O->>MF: Classify images<br/>(close-up detection)
+    MF-->>O: Image metadata + bboxes
+    
+    Note over O,MF: Parallel Attribute Extraction
+    
+    par
+        O->>FC: Extract category<br/>(non-close-up images)
+        FC->>S: Read filtered images
+        FC-->>O: Category + confidence
+    and
+        O->>H: Extract color<br/>(cropped images)
+        H->>S: Read cropped images
+        H-->>O: Color + confidence
+    and
+        O->>LLM: Extract condition<br/>(all images)
+        LLM->>S: Read all images
+        LLM-->>O: Condition + confidence
+    and
+        O->>MF: Extract brand<br/>(close-up images)
+        MF->>S: Read close-up images
+        MF-->>O: Brand + confidence
+    end
+    
+    O->>O: Aggregate results
+    O->>DB: Store inference results
+    O-->>C: Complete response with attributes
+```
+
+**Key Design Features:**
+- **Smart Image Filtering:** Different models get different image types (close-up vs full-garment)
+- **Parallel Processing:** All attribute extractions happen simultaneously  
+- **Graceful Degradation:** System continues if individual services fail
+- **Single Download:** Images downloaded once, shared via filesystem
+
+## 🚀 Setup & Run
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- 8GB+ RAM (for optimal performance)
-- Ports 8000-8003 and 5432 available
+- Docker & Docker Compose
+- Enough RAM (AI models are memory-hungry)
+- Ports 8000, 8010-8013 and 5432 free
+- OpenAI API key (for LLM service)
 
-### 1. Clone and Setup
+### Environment Setup
+
+Create `.env` file with required variables:
 
 ```bash
-git clone <repository-url>
-cd smartrobe
+# Copy example template
 cp .env.example .env
-# Edit .env if needed for your environment
+
+# Add your OpenAI API key, configure what you need in the .env file
 ```
 
-### 2. Start All Services
+### Start Services
 
 ```bash
-# Use the convenient startup script
-./scripts/start-dev.sh
-
-# Or manually with docker compose
+# Build and start all containers
 docker compose up --build
+
+# Or run in background
+docker compose up --build -d
+
+# Check all services are healthy
+curl http://localhost:8000/health
 ```
 
-### 3. Test the API
+**Startup time:** can be up to ~2-3 minutes (downloading AI models)
+
+### Test with Real Data
+
+In the folder `test-images/`, there are some sample clothing images.
+You can place there more, follow this structure:
+```
+test-images/
+├── 01/
+│   ├── image1.jpg  # Downloaded image based on the URLs in the urls.txt file (optional)
+│   ├── image2.jpg  # Downloaded image based on the URLs in the urls.txt file (optional)
+│   ├── image3.jpg  # Downloaded image based on the URLs in the urls.txt file (optional)
+│   ├── image4.jpg  # Downloaded image based on the URLs in the urls.txt file (optional)
+│   └── urls.txt    # List of image URLs
+├── 02/
+│   └── ...
+└── ...
+```
+
+Folders can have any arbitrary name, but they must contain a `urls.txt` file with the list of image URLs.
+
+
+Then you can test the API with the `scripts/test_analyze.py` script:
 
 ```bash
-curl -X POST "http://localhost:8000/v1/items/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "images": [
-      "https://picsum.photos/600/400?random=1",
-      "https://picsum.photos/600/400?random=2", 
-      "https://picsum.photos/600/400?random=3",
-      "https://picsum.photos/600/400?random=4"
-    ]
-  }'
+# Sync dependencies
+uv sync
 
-# Example with fewer images (reduced accuracy)
-curl -X POST "http://localhost:8000/v1/items/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "images": [
-      "https://picsum.photos/600/400?random=1",
-      "https://picsum.photos/600/400?random=2"
-    ]
-  }'
+# Syntax
+uv run python scripts/test_analyze.py <folder_name>
+
+# Help
+uv run python scripts/test_analyze.py --help
+
+# Test with clothing images from test-images/03/
+uv run python scripts/test_analyze.py 03
 ```
-
-### 4. Explore the API
-
-- **Interactive Docs**: http://localhost:8000/docs
-- **Health Check**: http://localhost:8000/health
-- **Service Status**: Check individual services at ports 8001-8003
 
 ## 📋 API Reference
 
-### Analyze Item Endpoint
+### Main Endpoint
 
 **POST** `/v1/items/analyze`
 
-Analyzes 1-4 clothing images and returns extracted attributes.
-
-#### Request Body
-
-```json
-{
-  "images": [
-    "https://example.com/image1.jpg",
-    "https://example.com/image2.jpg", 
-    "https://example.com/image3.jpg",
-    "https://example.com/image4.jpg"
-  ]
-}
+```bash
+curl -X POST "http://localhost:8000/v1/items/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "images": [
+      "https://example.com/shirt1.jpg",
+      "https://example.com/shirt2.jpg"
+    ]
+  }'
 ```
 
 **Requirements:**
-- 1-4 HTTPS image URLs (4 recommended for optimal accuracy)
-- Images ≤ 10MB each
-- Supported formats: JPEG, PNG, WebP
+- 1-4 HTTPS URLs only
+- JPEG/PNG/WebP formats
+- ≤10MB per image
 
-#### Response
+**Response:** JSON with extracted attributes (only implemented ones have values):
 
 ```json
 {
-  "id": "uuid-v4",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
   "attributes": {
-    // Vision attributes (6)
-    "category": "shirt",
-    "gender": "unisex", 
-    "sleeve_length": "long",
-    "neckline": "crew",
-    "closure_type": "button",
-    "fit": "regular",
+    "category": "shirt",     // ✅ Fashion-CLIP  
+    "color": "blue",         // ✅ Heuristics
+    "condition": "good",     // ✅ LLM-Multimodal
+    "brand": "Nike",         // ✅ Microsoft-Florence
     
-    // Heuristic attributes (4)
-    "color": "blue",
-    "material": "cotton",
-    "pattern": "solid", 
-    "brand": "Nike",
-    
-    // LLM attributes (3)
-    "style": "casual",
-    "season": "all_season",
-    "condition": "good"
+    // Not implemented yet (return null)
+    "gender": null,
+    "sleeve_length": null,
+    "neckline": null,
+    "closure_type": null,
+    "fit": null,
+    "material": null,
+    "pattern": null,
+    "style": null,
+    "season": null
   },
   "model_info": {
-    "vision_classifier": {
-      "model_type": "vision_classifier",
-      "version": "1.0.0",
-      "processing_time_ms": 450,
-      "confidence_scores": { "category": 0.95, ... },
+    "category": {
+      "service_name": "fashion-clip",
+      "processing_time_ms": 1200,
+      "confidence_score": 0.89,
       "success": true
-    },
-    // ... other models
+    }
+    // ... other model info
   },
-  "processing_info": {
-    "request_id": "uuid-v4",
-    "total_processing_time_ms": 1250,
-    "image_download_time_ms": 300,
-    "parallel_processing": true,
-    "timestamp": "2024-01-01T12:00:00Z",
-    "image_count": 4
+  "processing": {
+    "total_processing_time_ms": 3500,
+    "image_count": 2,
+    "implemented_attributes": ["category", "color", "condition", "brand"],
+    "skipped_attributes": ["gender", "sleeve_length", ...]
   }
 }
 ```
 
-**Note**: The `image_count` field shows how many images were processed. While 1-4 images are accepted, using 4 images provides the best accuracy for attribute extraction.
+**Other Endpoints:**
+- `GET /health` - Service health check
+- `GET /docs` - Interactive API documentation
 
 ## 🧪 Testing
 
-### Integration Tests
+### Development Testing
 
 ```bash
-# Start services first
-docker compose up -d
+# Health checks for all services
+curl http://localhost:8000/health  # Orchestrator
+curl http://localhost:8010/health  # Heuristics
+curl http://localhost:8011/health  # LLM-Multimodal
+curl http://localhost:8012/health  # Fashion-CLIP
+curl http://localhost:8013/health  # Microsoft-Florence
 
-# Run integration tests
-pytest tests/ -v
+# Test with sample clothing images
+uv run python scripts/test_analyze.py 03
 
-# Or run specific test file
-pytest tests/test_integration.py::test_analyze_endpoint_success -v
+# Monitor logs during testing
+docker compose logs -f orchestrator
 ```
 
-### Manual Testing
+### Troubleshooting
 
+**Services won't start:**
 ```bash
-# Check all service health
-curl http://localhost:8000/health
-curl http://localhost:8001/health  # Vision service
-curl http://localhost:8002/health  # Heuristic service  
-curl http://localhost:8003/health  # LLM service
-
-# Test with sample images
-curl -X POST "http://localhost:8000/v1/items/analyze" \
-  -H "Content-Type: application/json" \
-  -d @tests/sample_request.json
+docker compose down -v  # Reset everything
+docker system prune     # Clean Docker cache
+docker compose up --build
 ```
+
+**Slow responses/timeouts:**
+- Check Docker memory allocation (may eat a lot of RAM)
+- Monitor logs: `docker compose logs service-name`
+- Some AI models download on first run (patience required)
 
 ## 🔧 Development
 
@@ -211,169 +280,118 @@ curl -X POST "http://localhost:8000/v1/items/analyze" \
 
 ```
 smartrobe/
-├── orchestrator/          # Main API service
 ├── services/
-│   ├── vision_classifier/ # Visual attribute extraction
-│   ├── heuristic_model/   # Rule-based analysis
-│   └── llm_model/         # Language model reasoning
-├── shared/                # Common utilities and schemas
-├── database/              # Database models and migrations
-├── tests/                 # Integration tests
-├── scripts/               # Development scripts
-└── compose.yml     # Service orchestration
+│   ├── orchestrator/      # Main API service (routes requests)
+│   ├── fashion-clip/      # Pretrained vision classifier  
+│   ├── heuristics/        # Rule-based analysis (color detection)
+│   ├── llm-multimodal/    # LLM reasoning (OpenAI GPT-4V)
+│   └── microsoft-florence/ # OCR/brand detection
+├── shared/                # Common utilities, schemas, DB models
+├── scripts/               # Testing utilities
+├── test-images/           # Sample clothing images  
+├── config/                # Attribute routing configuration
+└── compose.yml            # Docker orchestration
 ```
 
-### Adding New Attributes
+### Original Task Context
 
-1. Update `shared/schemas.py` with new enum values
-2. Modify appropriate service in `services/` to extract the attribute
-3. Update database schema if needed
-4. Add tests for the new attribute
+**✅ Completed:**
+- Microservices architecture (orchestrator + 4 model services)
+- Docker containerization with `docker compose`
+- 3+ model types: vision classifier, heuristic model, LLM
+- REST API: `POST /v1/items/analyze`
+- JSON input/output with metadata
+- Structured logging and health endpoints
+- PostgreSQL persistence
 
-### Environment Configuration
+**📋 Original Goal:** 13 attributes extracted from exactly 4 images
+**🎯 Current Status:** 4/13 attributes implemented (proof of concept)
 
-Key environment variables in `.env`:
+### Adding More Attributes
 
-```bash
-# Database
-DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/smartrobe
+To complete the original 13-attribute goal:
 
-# Service URLs (for inter-service communication)
-VISION_SERVICE_URL=http://vision-classifier:8001
-HEURISTIC_SERVICE_URL=http://heuristic-model:8002  
-LLM_SERVICE_URL=http://llm-model:8003
+1. **Update routing config:** `config/attribute_routing.yml`
+2. **Implement in services:** Add extraction logic to appropriate service
+3. **Update schemas:** Add new enums in `shared/schemas.py`
+4. **Test:** Use `uv run python scripts/test_analyze.py` to verify
 
-# Image Processing
-MAX_IMAGE_SIZE_MB=10
-ALLOWED_IMAGE_FORMATS=jpeg,jpg,png,webp
+## 🚀 Production Deployment Considerations
 
-# Performance
-SERVICE_REQUEST_TIMEOUT=30
-MAX_CONCURRENT_REQUESTS=10
-```
+When moving SmartRobe to production, there are several key decisions and considerations to keep in mind:
 
-## 📊 Monitoring & Observability
+### Deployment Strategy Options
 
-### Health Checks
+**Serverless Approach (Cloud Run/Lambda)**
+- Best for: Variable traffic, cost optimization, minimal ops overhead
+- Considerations: Cold starts may affect response times for AI models
+- Good fit when: Usage is unpredictable or you want to minimize infrastructure management
 
-All services expose `/health` endpoints returning:
+**Container Orchestration (Kubernetes/ECS)**
+- Best for: High-volume, consistent traffic, need for fine-grained control
+- Considerations: Requires more operational expertise and setup complexity
+- Good fit when: You have dedicated DevOps resources and predictable high traffic
 
-```json
-{
-  "service": "orchestrator",
-  "status": "healthy",
-  "version": "1.0.0", 
-  "timestamp": "2024-01-01T12:00:00Z",
-  "details": {
-    "uptime_seconds": 3600,
-    "database_connected": true
-  }
-}
-```
+### Key Production Considerations
 
-### Structured Logging
+**Data Storage & Management**
+- Replace local file storage with cloud storage (S3, Cloud Storage, etc.)
+- Use managed database services for reliability and automated backups
+- Consider CDN for image delivery to improve global performance
+- Plan for data retention policies and GDPR compliance
 
-All services emit structured JSON logs:
+**Scalability & Performance**
+- AI model inference can be resource-intensive - consider GPU instances for heavy models
+- Image processing may require significant memory - plan instance sizing accordingly
+- Implement proper caching strategies for frequently accessed data
+- Consider async processing for non-real-time operations
 
-```json
-{
-  "time": "2024-01-01 12:00:00",
-  "level": "INFO",
-  "service": "orchestrator", 
-  "message": "Item analysis completed successfully",
-  "request_id": "uuid-v4",
-  "total_time_ms": 1250
-}
-```
+**Security & Compliance**
+- Secure API endpoints with proper authentication
+- Encrypt sensitive data in transit and at rest
+- Implement proper access controls for different service components
+- Regular security audits and dependency updates
 
-### Performance Metrics
+**Monitoring & Observability**
+- Set up comprehensive logging for debugging and performance analysis
+- Monitor key metrics: response times, error rates, resource utilization
+- Implement alerting for critical failures and performance degradation
+- Track business metrics: successful analyses, user satisfaction
 
-- **Target Response Time**: 2-8 seconds
-- **Concurrent Requests**: Up to 10 simultaneous 
-- **Image Processing**: 1-4 images up to 10MB each (4 recommended)
-- **Database Storage**: All results persisted with metadata
+**Cost Management**
+- Monitor cloud costs, especially for AI model inference
+- Consider reserved instances for predictable workloads
+- Implement auto-scaling to match demand
+- Regular cost optimization reviews
 
-## 🚀 Production Deployment
+## 📋 Design Trade-offs
 
-### Scaling Considerations
+### What Worked Well
+- **Microservices:** Easy to develop/test different models independently
+- **Shared Storage:** Avoids duplicate image downloads, enables image filtering
+- **Configuration-Driven:** Easy to add new attributes via `config/attribute_routing.yml`
+- **Parallel Processing:** Significant performance gains from concurrent extraction
 
-- **Orchestrator**: Scale horizontally behind load balancer
-- **Model Services**: Scale independently based on processing time
-- **Database**: Use managed PostgreSQL (Cloud SQL, RDS, etc.)
-- **Storage**: Implement shared storage (NFS, S3, etc.)
+### What Could Be Better
+- **Storage:** File system storage doesn't scale (needs S3/GCS in production)
+- **Error Handling:** Could be more sophisticated (retry logic, circuit breakers)
+- **Model Loading:** Cold starts slow (models download on first run)
+- **Testing:** More comprehensive integration tests needed
 
-### Security
+## 🪜 Next Steps
 
-- Use HTTPS in production
-- Secure database connections
-- Implement rate limiting
-- Add authentication/authorization as needed
-- Validate and sanitize all inputs
+**Next Steps to Complete 13 Attributes:**
+1. Implement remaining 9 attributes across services:
+   - `gender`, `sleeve_length`, `neckline`, `closure_type`, `fit` → Fashion-CLIP
+   - `material`, `pattern` → Heuristics  
+   - `style`, `season` → LLM-Multimodal
+2. Implement rate limiting and authentication
+3. Add comprehensive error handling and retries
+4. Performance optimization, improved concurrency handling and caching
 
-### Monitoring
-
-- Set up log aggregation (ELK, Splunk, etc.)
-- Monitor response times and error rates
-- Alert on service failures
-- Track database performance
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-**Services won't start:**
-```bash
-# Check Docker resources
-docker system df
-docker system prune  # Clean up if needed
-
-# Check logs
-docker compose logs orchestrator
-```
-
-**Database connection issues:**
-```bash
-# Verify PostgreSQL is running
-docker compose ps postgres
-
-# Check database logs
-docker compose logs postgres
-```
-
-**Slow responses:**
-```bash
-# Check individual service health
-curl http://localhost:8001/health
-curl http://localhost:8002/health  
-curl http://localhost:8003/health
-
-# Monitor resource usage
-docker stats
-```
-
-### Debug Mode
-
-Enable debug logging:
-
-```bash
-# In .env file
-DEBUG=true
-LOG_LEVEL=DEBUG
-
-# Restart services
-docker compose restart
-```
-
-## 📄 License
-
-[Add your license information]
-
-## 🤝 Contributing
-
-[Add contributing guidelines]
-
----
-
-**Built with ❤️ for modern clothing marketplaces**
-
-Extracting attributes from second-hand clothing items using computer vision, machine learning, and LLMs.
+**Disclaimer:** What's Definitely Missing:
+- Production-grade error handling and monitoring
+- Proper authentication/authorization
+- Rate limiting and request validation
+- Comprehensive test coverage
+- Performance optimization for high throughput
