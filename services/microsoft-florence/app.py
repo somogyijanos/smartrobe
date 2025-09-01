@@ -8,7 +8,9 @@ using Microsoft's Florence-2 vision model for open vocabulary object detection.
 import asyncio
 import io
 import time
+import re
 from typing import Any, Dict, List, Optional, Tuple
+from difflib import SequenceMatcher
 
 import requests
 import torch
@@ -16,24 +18,33 @@ from PIL import Image
 from transformers import AutoModelForCausalLM, AutoProcessor
 from fastapi import HTTPException
 
-from shared.base_service import BaseService
+from shared.base_service import CapabilityService
 from shared.schemas import ServiceRequest, ServiceResponse
 
 
-class MicrosoftFlorenceService(BaseService):
+class MicrosoftFlorenceService(CapabilityService):
     """Microsoft Florence-2 service for garment detection and cropping."""
 
+    # Define supported attributes
+    SUPPORTED_ATTRIBUTES = {"brand": str}
+    SERVICE_TYPE = "vision_ocr"
+
     def __init__(self):
-        super().__init__("microsoft-florence", "1.0.0")
+        super().__init__("microsoft-florence", "vision_ocr", "1.0.0")
         self.model = None
         self.processor = None
         self.model_id = 'microsoft/Florence-2-base'
+        # Lock to prevent concurrent access to the model during inference (created in async init)
+        self._model_lock = None
 
     async def _initialize_service(self) -> None:
         """Initialize the Florence-2 model."""
         self.logger.info("Loading Microsoft Florence-2 model...")
         
         try:
+            # Create the asyncio lock for model concurrency protection
+            self._model_lock = asyncio.Lock()
+            
             # Load model and processor
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_id, 
@@ -56,10 +67,14 @@ class MicrosoftFlorenceService(BaseService):
         """Cleanup Florence-2 service."""
         self.model = None
         self.processor = None
+        self._model_lock = None
         self.logger.info("Microsoft Florence-2 service cleaned up")
 
     def _add_routes(self, app) -> None:
         """Add Florence-2 specific routes."""
+        
+        # First add the capability routes (extract_batch, etc.)
+        super()._add_routes(app)
         
         @app.post("/detect_garment")
         async def detect_garment(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -302,37 +317,421 @@ class MicrosoftFlorenceService(BaseService):
                     "error_message": str(e)
                 }
 
+    async def extract_single_attribute(
+        self, request_id: str, attribute_name: str, image_paths: list[str]
+    ) -> tuple[Any, float]:
+        """
+        Extract a single attribute from images.
+        
+        Args:
+            request_id: Unique request identifier
+            attribute_name: Name of the attribute to extract
+            image_paths: List of paths to images
+            
+        Returns:
+            Tuple of (attribute_value, confidence_score)
+        """
+        if attribute_name == "brand":
+            return await self._extract_brand(image_paths)
+        else:
+            raise ValueError(f"Unsupported attribute: {attribute_name}")
+
+    async def _extract_brand(self, image_paths: List[str]) -> Tuple[Optional[str], float]:
+        """
+        Extract brand from multiple images using OCR approach from brand.ipynb.
+        
+        This follows the EXACT approach from brand.ipynb BUT only on close-up images:
+        1. First identify which images are close-ups using garment detection
+        2. Run OCR only on close-up images (brands are only visible in close-ups)
+        3. Order OCR results by text size (largest first)  
+        4. Find overlapping brands across close-up images
+        5. Return the best candidate
+        
+        Returns:
+            Tuple of (brand_name, confidence_score)
+        """
+        try:
+            self.logger.info(
+                f"Starting brand extraction from {len(image_paths)} images - filtering for close-ups first",
+                image_count=len(image_paths)
+            )
+            
+            # Step 1: Identify close-up images first
+            close_up_images = []
+            close_up_paths = []
+            
+            for i, image_path in enumerate(image_paths):
+                try:
+                    start_time = time.time()
+                    
+                    # Load image
+                    image = Image.open(image_path)
+                    
+                    # Run garment detection to determine if close-up
+                    garment_result = await self._run_garment_detection(image)
+                    is_close_up = self._is_close_up(image, garment_result)
+                    
+                    processing_time = int((time.time() - start_time) * 1000)
+                    
+                    self.logger.debug(
+                        f"Analyzed image {i+1}/{len(image_paths)} for close-up",
+                        image_path=image_path,
+                        is_close_up=is_close_up,
+                        processing_time_ms=processing_time
+                    )
+                    
+                    if is_close_up:
+                        close_up_images.append(image)
+                        close_up_paths.append(image_path)
+                        
+                except Exception as e:
+                    self.logger.error(f"Close-up detection failed for image {i+1} ({image_path}): {str(e)}")
+                    continue
+            
+            if not close_up_images:
+                self.logger.warning("No close-up images found - brand extraction requires close-up garment images")
+                return None, 0.0
+            
+            self.logger.info(
+                f"Found {len(close_up_images)} close-up images out of {len(image_paths)} total",
+                close_up_count=len(close_up_images),
+                close_up_paths=close_up_paths
+            )
+            
+            # Step 2: Run OCR only on close-up images (like brand.ipynb)
+            all_ocr_labels = []
+            
+            for i, (image, image_path) in enumerate(zip(close_up_images, close_up_paths)):
+                try:
+                    start_time = time.time()
+                    
+                    # Run OCR on close-up image
+                    ocr_result = await self._run_ocr_with_region(image)
+                    
+                    processing_time = int((time.time() - start_time) * 1000)
+                    
+                    if ocr_result and 'quad_boxes' in ocr_result and 'labels' in ocr_result:
+                        # Order labels by bbox size (largest text first) - like brand.ipynb
+                        labels_ordered = self._select_greatest_bbox(
+                            ocr_result['quad_boxes'], 
+                            ocr_result['labels']
+                        )
+                        all_ocr_labels.append(labels_ordered)
+                        
+                        # Clean the top labels for debugging
+                        top_labels_cleaned = [self._clean_ocr_label(label) for label in labels_ordered[:5]]
+                        
+                        self.logger.debug(
+                            f"OCR completed for close-up image {i+1}/{len(close_up_images)}",
+                            image_path=image_path,
+                            processing_time_ms=processing_time,
+                            labels_found=len(labels_ordered),
+                            raw_top_labels=labels_ordered[:3],  # Show raw OCR results
+                            cleaned_top_labels=top_labels_cleaned[:3]  # Show cleaned results
+                        )
+                    else:
+                        self.logger.warning(f"No OCR data for close-up image {i+1}: {image_path}")
+                        
+                except Exception as e:
+                    self.logger.error(f"OCR failed for close-up image {i+1} ({image_path}): {str(e)}")
+                    continue
+            
+            if not all_ocr_labels:
+                self.logger.warning("No OCR labels extracted from any image")
+                return None, 0.0
+            
+            self.logger.info(
+                f"OCR completed on {len(all_ocr_labels)} close-up images",
+                successful_ocr_images=len(all_ocr_labels),
+                total_close_ups=len(close_up_images),
+                total_images=len(image_paths)
+            )
+            
+            # Debug: Show all OCR results before overlap detection
+            self.logger.info("OCR results summary for debugging:")
+            for i, labels in enumerate(all_ocr_labels):
+                cleaned_labels = [self._clean_ocr_label(label) for label in labels[:5]]
+                self.logger.info(
+                    f"Image {i+1} top labels",
+                    raw_labels=labels[:3],
+                    cleaned_labels=cleaned_labels[:3]
+                )
+            
+            # Step 3: Find overlapping brand labels across close-up images (like brand.ipynb)
+            brand_candidates = self._select_overlapping_labels(all_ocr_labels)
+            
+            self.logger.info(
+                f"Overlap detection results",
+                candidates_found=len(brand_candidates),
+                candidates=brand_candidates[:3] if brand_candidates else []
+            )
+            
+            if brand_candidates:
+                # Return the best candidate with high confidence
+                best_brand = brand_candidates[0]
+                
+                # Calculate confidence based on detection consistency
+                matching_images = 0
+                for labels in all_ocr_labels:
+                    # Check if brand appears in top 3 labels of this image
+                    top_labels = [self._clean_ocr_label(label).lower() for label in labels[:3]]
+                    if any(best_brand.lower() in label for label in top_labels if label):
+                        matching_images += 1
+                
+                confidence = min(0.95, matching_images / len(all_ocr_labels))
+                
+                self.logger.info(
+                    f"Brand extraction successful via overlap detection",
+                    brand=best_brand,
+                    confidence=confidence,
+                    candidate_count=len(brand_candidates),
+                    matching_images=matching_images,
+                    total_images=len(all_ocr_labels)
+                )
+                return best_brand, confidence
+                
+            else:
+                # Fallback: return most common largest text (like brand.ipynb fallback)
+                self.logger.info("No overlapping brands found, trying fallback approach")
+                
+                if all_ocr_labels and all_ocr_labels[0]:
+                    # Get the largest text from first image as fallback
+                    fallback_brand = self._clean_ocr_label(all_ocr_labels[0][0])
+                    if fallback_brand and len(fallback_brand) > 2:
+                        self.logger.info(
+                            f"Brand extraction fallback successful",
+                            brand=fallback_brand,
+                            confidence=0.5,
+                            source="largest_text_from_first_image"
+                        )
+                        return fallback_brand, 0.5
+                
+                self.logger.warning("No brand could be extracted from images")
+                return None, 0.0
+                
+        except Exception as e:
+            self.logger.error(f"Brand extraction failed: {str(e)}")
+            return None, 0.0
+
+    async def _run_ocr_with_region(self, image: Image.Image) -> Dict[str, Any]:
+        """Run Florence-2 OCR with region detection on an image."""
+        task_prompt = '<OCR_WITH_REGION>'
+        
+        if self.processor is None or self.model is None or self._model_lock is None:
+            raise RuntimeError("Model not initialized")
+        
+        # Use lock to prevent concurrent model access
+        async with self._model_lock:
+            # Process inputs
+            inputs = self.processor(text=task_prompt, images=image, return_tensors="pt")
+            
+            # Generate
+            generated_ids = self.model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024,
+                early_stopping=False,
+                do_sample=False,
+                num_beams=3,
+            )
+            
+            # Decode and parse
+            generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+            parsed_answer = self.processor.post_process_generation(
+                generated_text, 
+                task=task_prompt, 
+                image_size=(image.width, image.height)
+            )
+        
+        return parsed_answer.get('<OCR_WITH_REGION>', {})
+
+    def _select_greatest_bbox(self, bboxes: List[List[float]], labels: List[str]) -> List[str]:
+        """Select labels ordered by bbox height (largest first)."""
+        bbox_data = []
+        
+        for idx, bbox in enumerate(bboxes):
+            # bbox is a polygon with 8 coordinates [x1, y1, x2, y2, x3, y3, x4, y4]
+            # Convert to min/max coordinates to calculate height
+            y_coords = [bbox[i] for i in range(1, len(bbox), 2)]
+            
+            min_y, max_y = min(y_coords), max(y_coords)
+            height = max_y - min_y
+            
+            bbox_data.append({
+                'label': labels[idx],
+                'height': height
+            })
+        
+        # Sort by height in descending order
+        bbox_data_sorted = sorted(bbox_data, key=lambda x: x['height'], reverse=True)
+        
+        # Return simple list of labels ordered by height
+        return [item['label'] for item in bbox_data_sorted]
+
+    def _select_overlapping_labels(self, all_labels: List[List[str]]) -> List[str]:
+        """
+        Find the most prioritized and similar labels across multiple lists.
+        
+        Args:
+            all_labels: List of label lists, where each inner list is ordered by priority
+        
+        Returns:
+            List of matching labels ordered by their combined priority and similarity score
+        """
+        if len(all_labels) < 2:
+            return []
+        
+        def calculate_similarity(text1: str, text2: str) -> float:
+            """Calculate similarity between two text strings"""
+            text1_lower = text1.lower()
+            text2_lower = text2.lower()
+            
+            # Basic sequence similarity
+            seq_similarity = SequenceMatcher(None, text1_lower, text2_lower).ratio()
+            
+            # Substring bonus: if one is contained in the other
+            if text1_lower in text2_lower or text2_lower in text1_lower:
+                shorter_len = min(len(text1_lower), len(text2_lower))
+                longer_len = max(len(text1_lower), len(text2_lower))
+                substring_bonus = shorter_len / longer_len * 0.3
+                seq_similarity = min(1.0, seq_similarity + substring_bonus)
+            
+            return seq_similarity
+        
+        def calculate_priority_score(positions: List[int], total_lists: int) -> float:
+            """Calculate priority score based on positions in each list"""
+            # Lower positions (earlier in list) get higher scores
+            # Missing from a list gets penalty
+            if len(positions) < total_lists:
+                coverage_penalty = len(positions) / total_lists
+            else:
+                coverage_penalty = 1.0
+            
+            # Average inverse position (1/position) for priority
+            avg_priority = sum(1.0 / (pos + 1) for pos in positions) / len(positions)
+            
+            return avg_priority * coverage_penalty
+        
+        # Create candidate matches by comparing labels across all lists
+        candidates = {}
+        similarity_threshold = 0.6
+        
+        for i, list1 in enumerate(all_labels):
+            for pos1, label1 in enumerate(list1):
+                clean1 = self._clean_ocr_label(label1)
+                if not clean1:
+                    continue
+                    
+                # Compare with labels from other lists
+                for j, list2 in enumerate(all_labels):
+                    if i >= j:  # Only compare each pair once
+                        continue
+                        
+                    for pos2, label2 in enumerate(list2):
+                        clean2 = self._clean_ocr_label(label2)
+                        if not clean2:
+                            continue
+                        
+                        similarity = calculate_similarity(clean1, clean2)
+                        
+                        if similarity >= similarity_threshold:
+                            # Use the shorter/cleaner label as the canonical form
+                            if len(clean1) <= len(clean2):
+                                canonical_label = clean1
+                                original_label = label1
+                            else:
+                                canonical_label = clean2
+                                original_label = label2
+                            
+                            canonical_key = canonical_label.lower()
+                            
+                            if canonical_key not in candidates:
+                                candidates[canonical_key] = {
+                                    'label': canonical_label,
+                                    'original': original_label,
+                                    'positions': {},
+                                    'similarities': [],
+                                    'list_count': 0
+                                }
+                            
+                            # Track positions in each list
+                            candidates[canonical_key]['positions'][i] = pos1
+                            candidates[canonical_key]['positions'][j] = pos2
+                            candidates[canonical_key]['similarities'].append(similarity)
+                            
+                            # Update list count
+                            candidates[canonical_key]['list_count'] = len(candidates[canonical_key]['positions'])
+        
+        # Score and rank candidates
+        scored_candidates = []
+        
+        for key, candidate in candidates.items():
+            positions = list(candidate['positions'].values())
+            avg_similarity = sum(candidate['similarities']) / len(candidate['similarities'])
+            priority_score = calculate_priority_score(positions, len(all_labels))
+            
+            # Combined score: priority * similarity * coverage
+            coverage_boost = candidate['list_count'] / len(all_labels)
+            final_score = priority_score * avg_similarity * (1 + coverage_boost)
+            
+            scored_candidates.append({
+                'label': candidate['label'],
+                'original': candidate['original'],
+                'score': final_score,
+                'list_count': candidate['list_count'],
+                'avg_similarity': avg_similarity,
+                'positions': positions
+            })
+        
+        # Sort by score (highest first) and return labels
+        scored_candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        return [candidate['label'] for candidate in scored_candidates]
+
+    def _clean_ocr_label(self, label: str) -> str:
+        """Clean OCR artifacts and normalize text"""
+        if not label:
+            return ""
+        
+        # Remove OCR tokens like </s> and other angle bracket tokens
+        clean = re.sub(r'<[^>]*/?>', '', label)
+        # Remove extra whitespace and strip
+        clean = re.sub(r'\s+', ' ', clean.strip())
+        return clean
+
     async def _run_garment_detection(self, image: Image.Image) -> Dict[str, Any]:
         """Run Florence-2 garment detection on an image."""
         task_prompt = '<OPEN_VOCABULARY_DETECTION>'
         text_input = "garment"
         
-        if self.processor is None or self.model is None:
+        if self.processor is None or self.model is None or self._model_lock is None:
             raise RuntimeError("Model not initialized")
         
         # Prepare prompt
         prompt = task_prompt + text_input
         
-        # Process inputs
-        inputs = self.processor(text=prompt, images=image, return_tensors="pt")
-        
-        # Generate
-        generated_ids = self.model.generate(
-            input_ids=inputs["input_ids"],
-            pixel_values=inputs["pixel_values"],
-            max_new_tokens=1024,
-            early_stopping=False,
-            do_sample=False,
-            num_beams=3,
-        )
-        
-        # Decode and parse
-        generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-        parsed_answer = self.processor.post_process_generation(
-            generated_text, 
-            task=task_prompt, 
-            image_size=(image.width, image.height)
-        )
+        # Use lock to prevent concurrent model access
+        async with self._model_lock:
+            # Process inputs
+            inputs = self.processor(text=prompt, images=image, return_tensors="pt")
+            
+            # Generate
+            generated_ids = self.model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024,
+                early_stopping=False,
+                do_sample=False,
+                num_beams=3,
+            )
+            
+            # Decode and parse
+            generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+            parsed_answer = self.processor.post_process_generation(
+                generated_text, 
+                task=task_prompt, 
+                image_size=(image.width, image.height)
+            )
         
         return parsed_answer.get('<OPEN_VOCABULARY_DETECTION>', {})
 
@@ -371,7 +770,7 @@ class MicrosoftFlorenceService(BaseService):
     async def _check_service_health(self) -> bool:
         """Check Microsoft Florence-2 service health."""
         try:
-            if self.model is None or self.processor is None:
+            if self.model is None or self.processor is None or self._model_lock is None:
                 return False
             
             # Test with a small dummy image

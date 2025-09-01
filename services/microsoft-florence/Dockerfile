@@ -22,8 +22,8 @@ RUN uv pip install --system -e ./services/microsoft-florence
 # Create shared storage directory
 RUN mkdir -p /app/shared_storage
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check - longer start period for model loading
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000

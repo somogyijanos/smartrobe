@@ -38,7 +38,8 @@ class SimplifiedOrchestrator(BaseService):
 
     def __init__(self):
         super().__init__("orchestrator", "2.0.0")  # Version bump for simplified design
-        self.client = httpx.AsyncClient(timeout=self.settings.service_request_timeout)
+        # Create client without timeout - we'll set per-request timeouts
+        self.client = httpx.AsyncClient()
         
         # Load simplified configuration
         self.config = self._load_simple_config()
@@ -239,17 +240,28 @@ class SimplifiedOrchestrator(BaseService):
             "image_paths": image_paths,
         }
 
+        # Get service-specific timeout
+        service_timeout = self.config.get("timeouts", {}).get(
+            service_name, 
+            self.config.get("timeouts", {}).get("default", 30)
+        )
+
         self.logger.debug(
             f"Calling service {service_name}",
             request_id=str(request_id),
             attributes=attributes,
             endpoint=endpoint_url,
+            timeout_seconds=service_timeout,
         )
 
         start_time = time.time()
         
         try:
-            response = await self.client.post(endpoint_url, json=request_data)
+            response = await self.client.post(
+                endpoint_url, 
+                json=request_data, 
+                timeout=service_timeout
+            )
             response.raise_for_status()
             
             processing_time_ms = int((time.time() - start_time) * 1000)

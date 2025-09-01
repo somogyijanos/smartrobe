@@ -30,7 +30,8 @@ class HeuristicsService(CapabilityService):
 
     def __init__(self):
         super().__init__("heuristics", "heuristic", "1.0.0")
-        self.client = httpx.AsyncClient(timeout=30)
+        # Longer timeout for Microsoft Florence calls (can take 60+ seconds for complex processing)
+        self.client = httpx.AsyncClient(timeout=90)
 
     async def _initialize_service(self) -> None:
         """Initialize heuristics service."""
