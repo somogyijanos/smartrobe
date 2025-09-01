@@ -7,13 +7,10 @@ requires-python = ">=3.10"
 dependencies = [
     # Utility scripts dependencies
     "typer",  # for scripts/validate_image_urls.py
-]
-
-[project.optional-dependencies]
-dev = [
     "ruff",     # linting & formatting
     "pytest",   # testing framework
     "httpx",    # for integration tests
+    "aiohttp"
 ]
 
 [tool.ruff]

@@ -81,7 +81,7 @@ def display_response(response: dict) -> None:
     """Display the analyze response in a nice format."""
     
     # Response overview
-    processing_info = response.get('processing_info', {})
+    processing_info = response.get('processing', {})
     console.print(Panel(
         f"[bold]Request ID:[/bold] {response.get('id', 'N/A')}\n"
         f"[bold]Processing Time:[/bold] {processing_info.get('total_processing_time_ms', 'N/A')}ms\n"
@@ -99,7 +99,9 @@ def display_response(response: dict) -> None:
         attr_table.add_column("Value", style="magenta")
         
         for key, value in attributes.items():
-            attr_table.add_row(key, str(value))
+            # Skip None values
+            if value is not None:
+                attr_table.add_row(key, str(value))
         
         console.print(attr_table)
     
