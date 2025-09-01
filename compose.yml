@@ -116,6 +116,7 @@ services:
       LOG_FORMAT: ${LOG_FORMAT}
       DEBUG: ${DEBUG}
       ENVIRONMENT: ${ENVIRONMENT}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
     ports:
       - "${LLM_MULTIMODAL_EXTERNAL_PORT}:8000"
     volumes:

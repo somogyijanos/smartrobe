@@ -14,6 +14,7 @@ attributes:
   
   # LLM service - handles its own preprocessing
   season: llm-multimodal
+  condition: llm-multimodal
   
   # Microsoft Florence service - OCR-based brand extraction from garment labels
   brand: microsoft-florence

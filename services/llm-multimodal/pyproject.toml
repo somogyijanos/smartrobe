@@ -11,8 +11,8 @@ dependencies = [
     "pillow",
     "loguru",
     "python-multipart",
-    # Add LLM-specific dependencies here when needed
-    # "openai",
+    # LLM-specific dependencies
+    "openai",
     # "transformers",
 ]
 

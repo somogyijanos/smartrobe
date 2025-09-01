@@ -194,7 +194,7 @@ class AllAttributes(BaseModel):
     # LLM attributes
     style: Style | None = None
     season: Season | None = None
-    condition: Condition | None = None
+    condition: str | None = None
 
 
 # =============================================================================
