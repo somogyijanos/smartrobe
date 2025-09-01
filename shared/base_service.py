@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import get_model_service_settings, get_settings
+from .config import get_settings
 from .logging import get_logger, setup_logging
 from .schemas import HealthCheck, HealthStatus
 
@@ -239,7 +239,7 @@ class CapabilityService(BaseService):
 
     def __init__(self, service_name: str, service_type: str, version: str = "1.0.0"):
         self.service_type = service_type
-        super().__init__(service_name, version, settings=get_model_service_settings())
+        super().__init__(service_name, version)
 
     @abstractmethod
     async def extract_single_attribute(

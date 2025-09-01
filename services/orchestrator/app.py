@@ -38,7 +38,6 @@ class SimplifiedOrchestrator(BaseService):
 
     def __init__(self):
         super().__init__("orchestrator", "2.0.0")  # Version bump for simplified design
-        self.settings = get_settings()
         self.client = httpx.AsyncClient(timeout=self.settings.service_request_timeout)
         
         # Load simplified configuration
@@ -74,6 +73,7 @@ class SimplifiedOrchestrator(BaseService):
             "heuristics": self.settings.heuristics_service_url,
             "llm-multimodal": self.settings.llm_multimodal_service_url,
             "fashion-clip": self.settings.fashion_clip_service_url,
+            "microsoft-florence": self.settings.microsoft_florence_service_url,
         }
 
     def _add_routes(self, app: FastAPI) -> None:

@@ -1,7 +1,7 @@
 [project]
-name = "smartrobe-heuristics"
+name = "smartrobe-microsoft-florence"
 version = "0.1.0"
-description = "Heuristic model service - rule-based attribute extraction from clothing images"
+description = "Microsoft Florence-2 service - garment detection and cropping using vision transformer"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi",
@@ -11,8 +11,11 @@ dependencies = [
     "pillow",
     "loguru",
     "python-multipart",
-    "numpy",
-    "scikit-learn",
+    "torch>=2.0.0",
+    "transformers>=4.39.0,<4.50",
+    "requests",
+    "einops",
+    "timm",
 ]
 
 [build-system]

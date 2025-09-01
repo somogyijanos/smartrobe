@@ -44,6 +44,7 @@ services:
       HEURISTICS_SERVICE_URL: http://heuristics:8000
       LLM_MULTIMODAL_SERVICE_URL: http://llm-multimodal:8000
       FASHION_CLIP_SERVICE_URL: http://fashion-clip:8000
+      MICROSOFT_FLORENCE_SERVICE_URL: http://microsoft-florence:8000
 
       
       # Configuration
@@ -71,6 +72,8 @@ services:
         condition: service_healthy
       fashion-clip:
         condition: service_healthy
+      microsoft-florence:
+        condition: service_healthy
 
     networks:
       - smartrobe-network
@@ -90,10 +93,14 @@ services:
       LOG_FORMAT: ${LOG_FORMAT}
       DEBUG: ${DEBUG}
       ENVIRONMENT: ${ENVIRONMENT}
+      MICROSOFT_FLORENCE_SERVICE_URL: http://microsoft-florence:8000
     ports:
       - "${HEURISTICS_EXTERNAL_PORT}:8000"
     volumes:
       - shared_storage:${SHARED_STORAGE_PATH}
+    depends_on:
+      microsoft-florence:
+        condition: service_healthy
     networks:
       - smartrobe-network
     restart: unless-stopped
@@ -130,6 +137,25 @@ services:
       ENVIRONMENT: ${ENVIRONMENT}
     ports:
       - "${FASHION_CLIP_EXTERNAL_PORT}:8000"
+    volumes:
+      - shared_storage:${SHARED_STORAGE_PATH}
+    networks:
+      - smartrobe-network
+    restart: unless-stopped
+
+  microsoft-florence:
+    build:
+      context: .
+      dockerfile: ./services/microsoft-florence/Dockerfile
+    container_name: smartrobe-microsoft-florence
+    environment:
+      SHARED_STORAGE_PATH: ${SHARED_STORAGE_PATH}
+      LOG_LEVEL: ${LOG_LEVEL}
+      LOG_FORMAT: ${LOG_FORMAT}
+      DEBUG: ${DEBUG}
+      ENVIRONMENT: ${ENVIRONMENT}
+    ports:
+      - "${MICROSOFT_FLORENCE_EXTERNAL_PORT}:8000"
     volumes:
       - shared_storage:${SHARED_STORAGE_PATH}
     networks:
