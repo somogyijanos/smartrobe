@@ -480,20 +480,43 @@ class MicrosoftFlorenceService(CapabilityService):
                 return best_brand, confidence
                 
             else:
-                # Fallback: return most common largest text (like brand.ipynb fallback)
-                self.logger.info("No overlapping brands found, trying fallback approach")
+                # Fallback: use data from the image with the least text found in it
+                self.logger.info("No overlapping brands found, trying fallback approach using image with least text")
                 
-                if all_ocr_labels and all_ocr_labels[0]:
-                    # Get the largest text from first image as fallback
-                    fallback_brand = self._clean_ocr_label(all_ocr_labels[0][0])
-                    if fallback_brand and len(fallback_brand) > 2:
-                        self.logger.info(
-                            f"Brand extraction fallback successful",
-                            brand=fallback_brand,
-                            confidence=0.5,
-                            source="largest_text_from_first_image"
+                if all_ocr_labels:
+                    # Find the image with the least amount of text
+                    min_text_count = float('inf')
+                    min_text_index = 0
+                    
+                    for i, labels in enumerate(all_ocr_labels):
+                        text_count = len(labels)
+                        self.logger.debug(
+                            f"Image {i+1} text count: {text_count}",
+                            image_path=close_up_paths[i] if i < len(close_up_paths) else f"unknown_{i}",
+                            labels=labels[:3]
                         )
-                        return fallback_brand, 0.5
+                        
+                        if text_count < min_text_count:
+                            min_text_count = text_count
+                            min_text_index = i
+                    
+                    self.logger.info(
+                        f"Selected image {min_text_index + 1} with least text count: {min_text_count}",
+                        selected_image_path=close_up_paths[min_text_index] if min_text_index < len(close_up_paths) else f"unknown_{min_text_index}"
+                    )
+                    
+                    # Get the largest text from the image with least text as fallback
+                    if all_ocr_labels[min_text_index]:
+                        fallback_brand = self._clean_ocr_label(all_ocr_labels[min_text_index][0])
+                        if fallback_brand and len(fallback_brand) > 2:
+                            self.logger.info(
+                                f"Brand extraction fallback successful",
+                                brand=fallback_brand,
+                                confidence=0.5,
+                                source=f"largest_text_from_least_text_image_{min_text_index + 1}",
+                                text_count=min_text_count
+                            )
+                            return fallback_brand, 0.5
                 
                 self.logger.warning("No brand could be extracted from images")
                 return None, 0.0

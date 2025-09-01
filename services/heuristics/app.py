@@ -102,12 +102,12 @@ class HeuristicsService(CapabilityService):
         start_time = time.time()
         
         try:
-            # Step 1: Get cropped images using metadata
-            cropped_image_paths = await self._get_cropped_images_from_metadata(request_id, image_paths, image_metadata)
+            # Step 1: Get center-cropped images (0.25-0.75 relative bbox)
+            cropped_image_paths = await self._get_center_cropped_images(request_id, image_paths)
             
             if not cropped_image_paths:
                 self.logger.warning(
-                    "No cropped images available for color extraction",
+                    "No center-cropped images available for color extraction",
                     request_id=request_id
                 )
                 # Fallback to original images if no cropped images available
@@ -144,6 +144,62 @@ class HeuristicsService(CapabilityService):
             )
             # Return a fallback color with low confidence
             return Color.GRAY, 0.1
+
+    async def _get_center_cropped_images(self, request_id: str, image_paths: list[str]) -> list[str]:
+        """Crop images to center part (0.25-0.75 relative bbox) for color extraction."""
+        cropped_paths = []
+        
+        try:
+            for image_path in image_paths:
+                try:
+                    # Load the image
+                    image = Image.open(image_path)
+                    width, height = image.size
+                    
+                    # Calculate center crop coordinates (0.25-0.75 relative bbox)
+                    x1 = int(width * 0.25)
+                    y1 = int(height * 0.25)
+                    x2 = int(width * 0.75)
+                    y2 = int(height * 0.75)
+                    
+                    # Crop the image to center part
+                    cropped_image = image.crop((x1, y1, x2, y2))
+                    
+                    # Save cropped image with a new name
+                    base_name = image_path.split('/')[-1].split('.')[0]
+                    cropped_path = f"{'/'.join(image_path.split('/')[:-1])}/{base_name}_center_cropped.jpg"
+                    cropped_image.save(cropped_path)
+                    cropped_paths.append(cropped_path)
+                    
+                    self.logger.debug(
+                        f"Center cropped image for color extraction",
+                        request_id=request_id,
+                        original_path=image_path,
+                        cropped_path=cropped_path,
+                        original_size=(width, height),
+                        crop_bbox=(x1, y1, x2, y2),
+                        relative_bbox="0.25-0.75"
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to center crop image {image_path}: {str(e)}")
+                    continue
+            
+            self.logger.info(
+                f"Created {len(cropped_paths)} center-cropped images for color extraction",
+                request_id=request_id,
+                successful_crops=len(cropped_paths),
+                total_images=len(image_paths)
+            )
+            
+            return cropped_paths
+        
+        except Exception as e:
+            self.logger.error(
+                f"Failed to create center-cropped images: {str(e)}",
+                request_id=request_id
+            )
+            return []
 
     async def _get_cropped_images_from_metadata(self, request_id: str, image_paths: list[str], image_metadata: list[dict]) -> list[str]:
         """Crop images using provided bounding box metadata."""
