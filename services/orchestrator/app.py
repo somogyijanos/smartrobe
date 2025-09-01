@@ -53,10 +53,15 @@ class SimplifiedOrchestrator(BaseService):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             
+            # Extract service names from config
+            services = set()
+            for attr_config in config["attributes"].values():
+                services.add(attr_config.get("service"))
+            
             self.logger.info(
                 "Simplified routing configuration loaded",
                 attributes=list(config["attributes"].keys()),
-                services=set(config["attributes"].values()),
+                services=list(services),
             )
             return config
             
@@ -98,9 +103,12 @@ class SimplifiedOrchestrator(BaseService):
                 # 1. Download and validate images
                 image_paths = await self._download_images(request_id, request.images)
                 
-                # 2. Extract attributes in parallel
+                # 2. Classify images (close-up vs non-close-up) and get garment bboxes
+                image_metadata = await self._classify_images(request_id, image_paths)
+                
+                # 3. Extract attributes in parallel with image filtering
                 attributes, model_info = await self._extract_attributes_parallel(
-                    request_id, image_paths
+                    request_id, image_paths, image_metadata
                 )
                 
                 # 3. Create response
@@ -150,8 +158,171 @@ class SimplifiedOrchestrator(BaseService):
                 if not self.settings.debug_retain_images:
                     cleanup_request_directory(str(request_id))
 
+    async def _classify_images(self, request_id: uuid.UUID, image_paths: List[str]) -> List[Dict[str, Any]]:
+        """
+        Classify images using Florence service to determine close-up vs non-close-up 
+        and get garment bounding boxes.
+        
+        Returns list of metadata dicts for each image:
+        [
+            {
+                "image_path": str,
+                "is_close_up": bool,
+                "garment_bbox": [x1, y1, x2, y2] | None,
+                "success": bool
+            }, ...
+        ]
+        """
+        florence_url = self.service_urls.get("microsoft-florence")
+        if not florence_url:
+            self.logger.warning("Florence service not available for image classification")
+            # Return default metadata
+            return [
+                {
+                    "image_path": path,
+                    "is_close_up": False,
+                    "garment_bbox": None,
+                    "success": False
+                } for path in image_paths
+            ]
+
+        self.logger.info(
+            "Classifying images with Florence service",
+            request_id=str(request_id),
+            image_count=len(image_paths),
+        )
+
+        # Call Florence service for each image
+        tasks = []
+        for image_path in image_paths:
+            task = self._classify_single_image(florence_url, image_path)
+            tasks.append(task)
+
+        # Execute classification tasks in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        image_metadata = []
+        for i, (image_path, result) in enumerate(zip(image_paths, results)):
+            if isinstance(result, Exception):
+                self.logger.error(
+                    f"Image classification failed for {image_path}",
+                    request_id=str(request_id),
+                    error=str(result),
+                )
+                metadata = {
+                    "image_path": image_path,
+                    "is_close_up": False,
+                    "garment_bbox": None,
+                    "success": False
+                }
+            else:
+                # Extract first garment bbox if available
+                bboxes = result.get("bboxes", [])
+                garment_bbox = bboxes[0] if bboxes else None
+                
+                metadata = {
+                    "image_path": image_path,
+                    "is_close_up": result.get("is_close_up", False),
+                    "garment_bbox": garment_bbox,
+                    "success": result.get("success", False)
+                }
+            image_metadata.append(metadata)
+
+        close_up_count = sum(1 for m in image_metadata if m["is_close_up"])
+        self.logger.info(
+            "Image classification completed",
+            request_id=str(request_id),
+            close_up_images=close_up_count,
+            non_close_up_images=len(image_metadata) - close_up_count,
+        )
+
+        # Store metadata to shared storage for debugging
+        await self._store_image_metadata(request_id, image_metadata)
+
+        return image_metadata
+
+    async def _store_image_metadata(self, request_id: uuid.UUID, image_metadata: List[Dict[str, Any]]) -> None:
+        """Store image metadata to shared storage for debugging purposes."""
+        try:
+            import json
+            from pathlib import Path
+            from shared.config import get_settings
+            
+            # Use the same shared storage path as images
+            settings = get_settings()
+            request_dir = Path(settings.shared_storage_path) / str(request_id)
+            metadata_file = request_dir / "image_metadata.json"
+            
+            # Ensure directory exists
+            metadata_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Store metadata with pretty formatting for easy debugging
+            with open(metadata_file, 'w') as f:
+                json.dump(image_metadata, f, indent=2)
+            
+            self.logger.info(
+                "Image metadata stored for debugging",
+                request_id=str(request_id),
+                metadata_file=str(metadata_file),
+                image_count=len(image_metadata)
+            )
+            
+        except Exception as e:
+            self.logger.error(
+                "Failed to store image metadata",
+                request_id=str(request_id),
+                error=str(e)
+            )
+            # Don't fail the request if metadata storage fails
+
+    def _filter_images_for_attribute(self, image_paths: List[str], image_metadata: List[Dict[str, Any]], image_filter: str) -> List[str]:
+        """
+        Filter images based on attribute requirements.
+        
+        Args:
+            image_paths: All available image paths
+            image_metadata: Metadata for each image (including is_close_up flag)
+            image_filter: Filter type - "all", "close_up", or "non_close_up"
+            
+        Returns:
+            List of filtered image paths
+        """
+        if image_filter == "all":
+            return image_paths
+        
+        filtered_paths = []
+        for meta in image_metadata:
+            image_path = meta["image_path"]
+            is_close_up = meta["is_close_up"]
+            
+            if image_filter == "close_up" and is_close_up:
+                filtered_paths.append(image_path)
+            elif image_filter == "non_close_up" and not is_close_up:
+                filtered_paths.append(image_path)
+                
+        return filtered_paths
+
+    async def _classify_single_image(self, florence_url: str, image_path: str) -> Dict[str, Any]:
+        """Classify a single image using Florence service."""
+        endpoint_url = f"{florence_url}/detect_garment"
+        request_data = {"image_path": image_path}
+        
+        try:
+            response = await self.client.post(endpoint_url, json=request_data, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            self.logger.error(f"Failed to classify image {image_path}: {str(e)}")
+            return {
+                "success": False,
+                "is_close_up": False,
+                "garment_bbox": None,
+                "error_message": str(e)
+            }
+
     async def _extract_attributes_parallel(
-        self, request_id: uuid.UUID, image_paths: List[str]
+        self, request_id: uuid.UUID, image_paths: List[str], image_metadata: List[Dict[str, Any]]
     ) -> tuple[AllAttributes, Dict[str, AttributeModelInfo]]:
         """
         Extract all configured attributes in parallel.
@@ -161,12 +332,24 @@ class SimplifiedOrchestrator(BaseService):
         2. Call each service once with its attributes
         3. Aggregate results
         """
-        # Group attributes by service
+        # Group attributes by service with image filtering
         service_tasks = {}
-        for attr, service in self.config["attributes"].items():
+        for attr, attr_config in self.config["attributes"].items():
+            # Extract service and filter from config
+            service = attr_config["service"]
+            image_filter = attr_config.get("image_filter", "all")
+            
+            # Filter images based on attribute requirements
+            filtered_images = self._filter_images_for_attribute(image_paths, image_metadata, image_filter)
+            
             if service not in service_tasks:
                 service_tasks[service] = []
-            service_tasks[service].append(attr)
+            service_tasks[service].append({
+                "attribute": attr,
+                "image_filter": image_filter,
+                "filtered_images": filtered_images,
+                "image_metadata": [meta for meta in image_metadata if meta["image_path"] in filtered_images]
+            })
 
         self.logger.info(
             "Starting parallel attribute extraction",
@@ -176,8 +359,8 @@ class SimplifiedOrchestrator(BaseService):
 
         # Create tasks for each service
         tasks = [
-            self._call_service(request_id, service, attrs, image_paths)
-            for service, attrs in service_tasks.items()
+            self._call_service(request_id, service, attr_configs)
+            for service, attr_configs in service_tasks.items()
         ]
 
         # Execute all service calls in parallel
@@ -187,7 +370,7 @@ class SimplifiedOrchestrator(BaseService):
         all_attributes = {}
         model_info = {}
 
-        for i, (service, attrs) in enumerate(service_tasks.items()):
+        for i, (service, attr_configs) in enumerate(service_tasks.items()):
             result = results[i]
             
             if isinstance(result, Exception):
@@ -197,7 +380,8 @@ class SimplifiedOrchestrator(BaseService):
                     error=str(result),
                 )
                 # Set all attributes for this service to None
-                for attr in attrs:
+                for attr_config in attr_configs:
+                    attr = attr_config["attribute"]
                     all_attributes[attr] = None
                     model_info[attr] = AttributeModelInfo(
                         service_name=service,
@@ -220,12 +404,12 @@ class SimplifiedOrchestrator(BaseService):
         return AllAttributes(**all_attributes), model_info
 
     async def _call_service(
-        self, request_id: uuid.UUID, service_name: str, attributes: List[str], image_paths: List[str]
+        self, request_id: uuid.UUID, service_name: str, attr_configs: List[Dict[str, Any]]
     ) -> tuple[Dict[str, Any], Dict[str, AttributeModelInfo]]:
         """
-        Call a service to extract multiple attributes.
+        Call a service to extract multiple attributes with filtered images and metadata.
         
-        Each service now receives all attributes it should extract in one call.
+        Each service receives attributes with their filtered images and bbox metadata.
         """
         service_url = self.service_urls.get(service_name)
         if not service_url:
@@ -233,11 +417,31 @@ class SimplifiedOrchestrator(BaseService):
 
         endpoint_url = f"{service_url}/extract_batch"
         
-        # New simplified request format
+        # Enhanced request format with filtered images and metadata
+        attributes = [config["attribute"] for config in attr_configs]
+        
+        # Collect all unique filtered images and their metadata
+        all_filtered_images = set()
+        image_metadata_map = {}
+        
+        for config in attr_configs:
+            for img_path in config["filtered_images"]:
+                all_filtered_images.add(img_path)
+            
+            # Build metadata map for these images
+            for meta in config["image_metadata"]:
+                image_metadata_map[meta["image_path"]] = meta
+        
+        # Convert to list for JSON serialization
+        image_paths = list(all_filtered_images)
+        image_metadata = [image_metadata_map[path] for path in image_paths]
+        
         request_data = {
             "request_id": str(request_id),
             "attributes": attributes,
             "image_paths": image_paths,
+            "image_metadata": image_metadata,  # Include bbox and close-up info
+            "attribute_configs": attr_configs,  # Include attribute filtering info
         }
 
         # Get service-specific timeout
@@ -252,6 +456,8 @@ class SimplifiedOrchestrator(BaseService):
             attributes=attributes,
             endpoint=endpoint_url,
             timeout_seconds=service_timeout,
+            image_count=len(image_paths),
+            has_metadata=len(image_metadata) > 0,
         )
 
         start_time = time.time()
@@ -288,6 +494,7 @@ class SimplifiedOrchestrator(BaseService):
                 request_id=str(request_id),
                 processing_time_ms=processing_time_ms,
                 extracted_attributes=list(service_results.keys()),
+                processed_images=len(image_paths),
             )
 
             return service_results, model_info

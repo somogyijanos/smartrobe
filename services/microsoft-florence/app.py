@@ -318,30 +318,37 @@ class MicrosoftFlorenceService(CapabilityService):
                 }
 
     async def extract_single_attribute(
-        self, request_id: str, attribute_name: str, image_paths: list[str]
+        self, request_id: str, attribute_name: str, image_paths: list[str],
+        image_metadata: list[dict], attribute_configs: list[dict]
     ) -> tuple[Any, float]:
         """
-        Extract a single attribute from images.
+        Extract a single attribute from images with metadata.
         
         Args:
             request_id: Unique request identifier
             attribute_name: Name of the attribute to extract
             image_paths: List of paths to images
+            image_metadata: Metadata including bboxes and close-up classification
+            attribute_configs: Attribute-specific configurations
             
         Returns:
             Tuple of (attribute_value, confidence_score)
         """
         if attribute_name == "brand":
-            return await self._extract_brand(image_paths)
+            return await self._extract_brand(image_paths, image_metadata)
         else:
             raise ValueError(f"Unsupported attribute: {attribute_name}")
 
-    async def _extract_brand(self, image_paths: List[str]) -> Tuple[Optional[str], float]:
+    async def _extract_brand(self, image_paths: List[str], image_metadata: list[dict]) -> Tuple[Optional[str], float]:
         """
         Extract brand from multiple images using OCR approach from brand.ipynb.
         
-        This follows the EXACT approach from brand.ipynb BUT only on close-up images:
-        1. First identify which images are close-ups using garment detection
+        With metadata support:
+        - Images are already filtered as close-ups by orchestrator
+        - Bounding box information is available for additional cropping if needed
+        
+        This follows the EXACT approach from brand.ipynb on close-up images:
+        1. Use pre-filtered close-up images from orchestrator
         2. Run OCR only on close-up images (brands are only visible in close-ups)
         3. Order OCR results by text size (largest first)  
         4. Find overlapping brands across close-up images
@@ -356,37 +363,19 @@ class MicrosoftFlorenceService(CapabilityService):
                 image_count=len(image_paths)
             )
             
-            # Step 1: Identify close-up images first
+            # Step 1: Use pre-filtered close-up images from orchestrator
             close_up_images = []
             close_up_paths = []
             
-            for i, image_path in enumerate(image_paths):
+            self.logger.info(f"Using pre-filtered close-up images from orchestrator metadata")
+            for image_path in image_paths:
                 try:
-                    start_time = time.time()
-                    
-                    # Load image
                     image = Image.open(image_path)
-                    
-                    # Run garment detection to determine if close-up
-                    garment_result = await self._run_garment_detection(image)
-                    is_close_up = self._is_close_up(image, garment_result)
-                    
-                    processing_time = int((time.time() - start_time) * 1000)
-                    
-                    self.logger.debug(
-                        f"Analyzed image {i+1}/{len(image_paths)} for close-up",
-                        image_path=image_path,
-                        is_close_up=is_close_up,
-                        processing_time_ms=processing_time
-                    )
-                    
-                    if is_close_up:
-                        close_up_images.append(image)
-                        close_up_paths.append(image_path)
-                        
+                    close_up_images.append(image)
+                    close_up_paths.append(image_path)
+                    self.logger.debug(f"Added pre-filtered close-up image: {image_path}")
                 except Exception as e:
-                    self.logger.error(f"Close-up detection failed for image {i+1} ({image_path}): {str(e)}")
-                    continue
+                    self.logger.error(f"Failed to load pre-filtered image {image_path}: {str(e)}")
             
             if not close_up_images:
                 self.logger.warning("No close-up images found - brand extraction requires close-up garment images")
@@ -750,20 +739,56 @@ class MicrosoftFlorenceService(CapabilityService):
             return None, None
 
     def _is_close_up(self, image: Image.Image, result: Dict[str, Any]) -> bool:
-        """Determine if the image is a close-up based on garment bounding box size."""
+        """
+        Determine if the image is a close-up based on garment bounding box proximity to edges.
+        
+        Logic: If the bbox comes near to at least 3 out of 4 image borders, it's a close-up.
+        "Near" means relative position <5% or >95% depending on which border.
+        """
         bboxes_labels = result.get('bboxes_labels', [])
         bboxes = result.get('bboxes', [])
         
         if 'garment' in bboxes_labels and bboxes:
-            img_size = image.size
+            img_width, img_height = image.size
             bbox = bboxes[0]  # Use first garment bbox
             x1, y1, x2, y2 = bbox
             
-            diff_x = (x2 - x1) / img_size[0]
-            diff_y = (y2 - y1) / img_size[1]
+            # Calculate relative positions (0.0 to 1.0)
+            left_rel = x1 / img_width
+            right_rel = x2 / img_width  
+            top_rel = y1 / img_height
+            bottom_rel = y2 / img_height
             
-            # Consider it a close-up if garment takes up >95% of image in both dimensions
-            return diff_x > 0.95 and diff_y > 0.95
+            # Check how many borders the garment touches (within 5% threshold)
+            borders_touched = 0
+            
+            if left_rel < 0.05:     # Touches left border
+                borders_touched += 1
+            if right_rel > 0.95:    # Touches right border  
+                borders_touched += 1
+            if top_rel < 0.05:      # Touches top border
+                borders_touched += 1
+            if bottom_rel > 0.95:   # Touches bottom border
+                borders_touched += 1
+            
+            # Close-up if garment touches at least 3 borders
+            is_close_up = borders_touched >= 3
+            
+            self.logger.debug(
+                "Close-up detection analysis",
+                bbox=[x1, y1, x2, y2],
+                image_size=[img_width, img_height],
+                relative_positions={
+                    "left": f"{left_rel:.3f}",
+                    "right": f"{right_rel:.3f}", 
+                    "top": f"{top_rel:.3f}",
+                    "bottom": f"{bottom_rel:.3f}"
+                },
+                borders_touched=borders_touched,
+                is_close_up=is_close_up
+            )
+            
+            return is_close_up
         else:
             return False
 

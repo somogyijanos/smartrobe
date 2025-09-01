@@ -281,17 +281,21 @@ class CapabilityService(BaseService):
         # Add batch extraction endpoint
         @app.post("/extract_batch")
         async def extract_batch(request_data: dict):
-            """Extract multiple attributes in a single request (simplified API)."""
+            """Extract multiple attributes in a single request with optional metadata."""
             start_time = time.time()
             request_id = request_data.get("request_id", "unknown")
             attributes = request_data.get("attributes", [])
             image_paths = request_data.get("image_paths", [])
+            image_metadata = request_data.get("image_metadata", [])
+            attribute_configs = request_data.get("attribute_configs", [])
 
             self.logger.info(
                 "Batch extraction request received",
                 request_id=request_id,
                 attributes=attributes,
                 image_count=len(image_paths),
+                has_metadata=len(image_metadata) > 0,
+                has_configs=len(attribute_configs) > 0,
             )
 
             # Extract all requested attributes
@@ -301,8 +305,9 @@ class CapabilityService(BaseService):
             for attr in attributes:
                 if attr in self.SUPPORTED_ATTRIBUTES:
                     try:
+                        # All services now support metadata
                         value, confidence = await self.extract_single_attribute(
-                            request_id, attr, image_paths
+                            request_id, attr, image_paths, image_metadata, attribute_configs
                         )
                         results[attr] = value
                         confidence_scores[attr] = confidence

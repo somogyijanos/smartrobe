@@ -52,15 +52,18 @@ class HeuristicsService(CapabilityService):
         self.logger.info("Heuristics service cleaned up")
 
     async def extract_single_attribute(
-        self, request_id: str, attribute_name: str, image_paths: list[str]
+        self, request_id: str, attribute_name: str, image_paths: list[str], 
+        image_metadata: list[dict], attribute_configs: list[dict]
     ) -> tuple[Any, float]:
         """
-        Extract a single attribute using heuristic methods.
+        Extract a single attribute using heuristic methods with metadata.
 
         Args:
             request_id: Unique request identifier
             attribute_name: Name of the attribute to extract
             image_paths: List of paths to images
+            image_metadata: Metadata including bboxes and close-up classification
+            attribute_configs: Attribute-specific configurations
 
         Returns:
             Tuple of (attribute_value, confidence_score)
@@ -73,17 +76,17 @@ class HeuristicsService(CapabilityService):
         )
 
         if attribute_name == "color":
-            return await self._extract_color(request_id, image_paths)
+            return await self._extract_color(request_id, image_paths, image_metadata)
         else:
             raise ValueError(f"Unsupported attribute: {attribute_name}")
 
-    async def _extract_color(self, request_id: str, image_paths: list[str]) -> tuple[Color, float]:
+    async def _extract_color(self, request_id: str, image_paths: list[str], image_metadata: list[dict]) -> tuple[Color, float]:
         """
-        Extract dominant color using real color analysis with Florence-2 preprocessing.
+        Extract dominant color using real color analysis with bbox cropping.
 
         Process:
-        1. Use Microsoft Florence-2 to crop images to garment only (non-close-ups)
-        2. Apply K-means clustering on cropped images
+        1. Use provided bounding boxes to crop images to garment
+        2. Apply K-means clustering on cropped images  
         3. Extract dominant color as hex
         4. Map to predefined color categories
         5. Calculate confidence based on color distribution
@@ -91,6 +94,7 @@ class HeuristicsService(CapabilityService):
         Args:
             request_id: Unique request identifier
             image_paths: List of paths to images
+            image_metadata: Metadata with bboxes for cropping
 
         Returns:
             Tuple of (Color, confidence_score)
@@ -98,12 +102,12 @@ class HeuristicsService(CapabilityService):
         start_time = time.time()
         
         try:
-            # Step 1: Get non-close-up cropped images using Microsoft Florence-2
-            cropped_image_paths = await self._get_cropped_images(request_id, image_paths)
+            # Step 1: Get cropped images using metadata
+            cropped_image_paths = await self._get_cropped_images_from_metadata(request_id, image_paths, image_metadata)
             
             if not cropped_image_paths:
                 self.logger.warning(
-                    "No suitable images for color extraction after Florence-2 processing",
+                    "No cropped images available for color extraction",
                     request_id=request_id
                 )
                 # Fallback to original images if no cropped images available
@@ -140,6 +144,67 @@ class HeuristicsService(CapabilityService):
             )
             # Return a fallback color with low confidence
             return Color.GRAY, 0.1
+
+    async def _get_cropped_images_from_metadata(self, request_id: str, image_paths: list[str], image_metadata: list[dict]) -> list[str]:
+        """Crop images using provided bounding box metadata."""
+        cropped_paths = []
+        
+        try:
+            for image_path in image_paths:
+                # Find metadata for this image
+                metadata = None
+                for meta in image_metadata:
+                    if meta.get("image_path") == image_path:
+                        metadata = meta
+                        break
+                
+                if not metadata or not metadata.get("success", False):
+                    self.logger.warning(f"No valid metadata for image {image_path}")
+                    continue
+                
+                garment_bbox = metadata.get("garment_bbox")
+                if not garment_bbox:
+                    self.logger.warning(f"No garment bounding box for image {image_path}")
+                    continue
+                
+                # Use the garment bounding box to crop the image
+                bbox = garment_bbox  # [x1, y1, x2, y2]
+                
+                # Load and crop the image
+                try:
+                    image = Image.open(image_path)
+                    cropped_image = image.crop(bbox)
+                    
+                    # Save cropped image with a new name
+                    base_name = image_path.split('/')[-1].split('.')[0]
+                    cropped_path = f"{'/'.join(image_path.split('/')[:-1])}/{base_name}_cropped.jpg"
+                    cropped_image.save(cropped_path)
+                    cropped_paths.append(cropped_path)
+                    
+                    self.logger.debug(
+                        f"Cropped image using metadata bbox",
+                        request_id=request_id,
+                        original_path=image_path,
+                        cropped_path=cropped_path,
+                        bbox=bbox
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to crop image {image_path}: {str(e)}")
+                    continue
+            
+            self.logger.info(
+                f"Created {len(cropped_paths)} cropped images from metadata",
+                request_id=request_id,
+                cropped_count=len(cropped_paths),
+                total_images=len(image_paths)
+            )
+            
+            return cropped_paths
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process images with metadata: {str(e)}")
+            return []
 
     async def _get_cropped_images(self, request_id: str, image_paths: list[str]) -> list[str]:
         """Use Microsoft Florence-2 to get cropped, non-close-up images suitable for color extraction."""

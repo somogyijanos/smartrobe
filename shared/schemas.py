@@ -302,11 +302,22 @@ class AttributeResponse(BaseModel):
 # =============================================================================
 
 
+class ImageMetadata(BaseModel):
+    """Metadata for each image including classification and garment bounding box."""
+    
+    image_path: str
+    is_close_up: bool
+    garment_bbox: list[float] | None = None  # [x1, y1, x2, y2] garment bounding box
+    success: bool = True
+
+
 class ServiceRequest(BaseModel):
     """Base request model for service communication."""
 
     request_id: UUID
     image_paths: list[str] = Field(..., min_items=1, max_items=4)
+    image_metadata: list[ImageMetadata] = []  # Optional metadata for each image
+    attribute_configs: list[dict] = []  # Optional attribute-specific configurations
 
 
 class ServiceResponse(BaseModel):

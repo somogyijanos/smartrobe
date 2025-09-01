@@ -68,7 +68,8 @@ class FashionClipService(CapabilityService):
         self.logger.info("Fashion-CLIP service cleaned up")
 
     async def extract_single_attribute(
-        self, request_id: str, attribute_name: str, image_paths: list[str]
+        self, request_id: str, attribute_name: str, image_paths: list[str],
+        image_metadata: list[dict], attribute_configs: list[dict]
     ) -> tuple[Any, float]:
         """
         Extract a single attribute using Fashion-CLIP vision understanding.
@@ -77,6 +78,8 @@ class FashionClipService(CapabilityService):
             request_id: Unique request identifier
             attribute_name: Name of the attribute to extract
             image_paths: List of paths to images
+            image_metadata: Metadata including bboxes and close-up classification
+            attribute_configs: Attribute-specific configurations
 
         Returns:
             Tuple of (attribute_value, confidence_score)
