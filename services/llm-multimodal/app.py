@@ -3,7 +3,7 @@ LLM Multimodal service for Smartrobe.
 
 Extracts contextual attributes using multimodal large language models.
 Combines vision and text understanding for sophisticated attribute reasoning.
-Currently implements season appropriateness and garment condition assessment.
+Currently implements garment condition assessment.
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from shared.base_service import CapabilityService
-from shared.schemas import Season
+
 
 
 # Condition analysis schemas (adapted from analyze_garment_condition.py)
@@ -116,7 +116,6 @@ class LLMMultimodalService(CapabilityService):
     """LLM Multimodal service for contextual attribute extraction."""
 
     SUPPORTED_ATTRIBUTES = {
-        "season": Season,
         "condition": str,  # Free-form condition description
     }
     SERVICE_TYPE = "llm"
@@ -171,106 +170,12 @@ class LLMMultimodalService(CapabilityService):
             image_count=len(image_paths),
         )
 
-        if attribute_name == "season":
-            return await self._extract_season(request_id, image_paths)
-        elif attribute_name == "condition":
+        if attribute_name == "condition":
             return await self._extract_condition(request_id, image_paths)
         else:
             raise ValueError(f"Unsupported attribute: {attribute_name}")
 
-    async def _extract_season(
-        self, request_id: str, image_paths: list[str]
-    ) -> tuple[Season, float]:
-        """
-        Extract seasonal appropriateness using multimodal LLM reasoning.
 
-        In a real implementation, this would:
-        1. Encode images using vision transformer
-        2. Generate detailed image descriptions
-        3. Analyze fabric weight, colors, and styling
-        4. Consider layering possibilities and coverage
-        5. Apply seasonal fashion knowledge
-        6. Reason about weather appropriateness
-        7. Generate confidence based on reasoning consistency
-
-        Args:
-            request_id: Unique request identifier
-            image_paths: List of paths to images
-
-        Returns:
-            Tuple of (Season, confidence_score)
-        """
-        # Simulate multimodal LLM processing time (slower than heuristics)
-        processing_time = random.uniform(0.8, 1.5)
-        await asyncio.sleep(processing_time)
-
-        # Mock multimodal reasoning with seasonal logic
-        # In reality, this would analyze fabric, colors, styling, coverage
-        season_reasoning = {
-            Season.SUMMER: {
-                "probability": 0.25,
-                "indicators": [
-                    "lightweight fabrics", "bright colors",
-                    "short sleeves", "minimal coverage"
-                ],
-                "confidence_range": (0.85, 0.95)
-            },
-            Season.WINTER: {
-                "probability": 0.20,
-                "indicators": [
-                    "heavy fabrics", "dark colors",
-                    "long sleeves", "layering potential"
-                ],
-                "confidence_range": (0.88, 0.96)
-            },
-            Season.SPRING: {
-                "probability": 0.22,
-                "indicators": [
-                    "medium weight", "pastel colors", "transitional pieces"
-                ],
-                "confidence_range": (0.75, 0.90)
-            },
-            Season.FALL: {
-                "probability": 0.23,
-                "indicators": [
-                    "medium-heavy fabrics", "earth tones", "layering friendly"
-                ],
-                "confidence_range": (0.78, 0.92)
-            },
-            Season.ALL_SEASON: {
-                "probability": 0.10,
-                "indicators": [
-                    "versatile design", "neutral colors", "adaptable styling"
-                ],
-                "confidence_range": (0.70, 0.85)
-            }
-        }
-
-        # Select season based on probabilities
-        seasons = list(season_reasoning.keys())
-        weights = [data["probability"] for data in season_reasoning.values()]
-        selected_season = random.choices(seasons, weights=weights)[0]
-
-        # Generate confidence based on reasoning strength
-        confidence_range = season_reasoning[selected_season]["confidence_range"]
-        confidence = random.uniform(*confidence_range)
-
-        # Simulate reasoning process (would be actual LLM reasoning)
-        reasoning_indicators = season_reasoning[selected_season]["indicators"]
-        selected_indicators = random.sample(
-            reasoning_indicators, min(2, len(reasoning_indicators))
-        )
-
-        self.logger.info(
-            "Season extraction completed",
-            request_id=request_id,
-            detected_season=selected_season.value,
-            confidence=confidence,
-            reasoning_indicators=selected_indicators,
-            processing_time_ms=int(processing_time * 1000),
-        )
-
-        return selected_season, confidence
 
     def _encode_image_to_base64(self, image_path: str) -> str:
         """Convert image file to base64 string for OpenAI API."""

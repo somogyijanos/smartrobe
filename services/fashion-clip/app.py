@@ -3,7 +3,6 @@ Fashion-CLIP service for Smartrobe.
 
 Extracts fashion-specific visual attributes using pre-trained vision models.
 Leverages CLIP-like architectures fine-tuned on fashion datasets.
-Currently implements neckline detection through vision understanding.
 """
 
 import asyncio
@@ -16,14 +15,13 @@ from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
 from shared.base_service import CapabilityService
-from shared.schemas import Neckline, ClothingCategory
+from shared.schemas import ClothingCategory
 
 
 class FashionClipService(CapabilityService):
     """Fashion-CLIP service for pre-trained vision-based attribute extraction."""
 
     SUPPORTED_ATTRIBUTES = {
-        "neckline": Neckline,
         "category": ClothingCategory,
     }
     SERVICE_TYPE = "pre_trained_vision"
@@ -90,122 +88,12 @@ class FashionClipService(CapabilityService):
             image_count=len(image_paths),
         )
 
-        if attribute_name == "neckline":
-            return await self._extract_neckline(request_id, image_paths)
-        elif attribute_name == "category":
+        if attribute_name == "category":
             return await self._extract_category(request_id, image_paths)
         else:
             raise ValueError(f"Unsupported attribute: {attribute_name}")
 
-    async def _extract_neckline(self, request_id: str, image_paths: list[str]) -> tuple[Neckline, float]:
-        """
-        Extract neckline type using Fashion-CLIP vision understanding.
 
-        In a real implementation, this would:
-        1. Preprocess images (resize, normalize, etc.)
-        2. Extract visual features using vision encoder
-        3. Generate text embeddings for neckline types
-        4. Compute similarity scores between image and text embeddings
-        5. Apply softmax to get probability distribution
-        6. Select highest probability neckline type
-        7. Return confidence based on probability scores
-
-        Args:
-            request_id: Unique request identifier
-            image_paths: List of paths to images
-
-        Returns:
-            Tuple of (Neckline, confidence_score)
-        """
-        # Simulate Fashion-CLIP processing time (moderate, faster than LLM)
-        processing_time = random.uniform(0.3, 0.7)
-        await asyncio.sleep(processing_time)
-
-        # Mock Fashion-CLIP classification with neckline-specific probabilities
-        # In reality, this would use actual vision-language similarity scores
-        neckline_similarities = {
-            Neckline.CREW: {
-                "similarity": random.uniform(0.15, 0.25),
-                "prevalence": 0.30,  # Most common neckline
-                "detection_difficulty": "easy"
-            },
-            Neckline.V_NECK: {
-                "similarity": random.uniform(0.12, 0.22),
-                "prevalence": 0.25,
-                "detection_difficulty": "easy"
-            },
-            Neckline.SCOOP: {
-                "similarity": random.uniform(0.10, 0.20),
-                "prevalence": 0.15,
-                "detection_difficulty": "medium"
-            },
-            Neckline.BOAT: {
-                "similarity": random.uniform(0.08, 0.18),
-                "prevalence": 0.08,
-                "detection_difficulty": "medium"
-            },
-            Neckline.SQUARE: {
-                "similarity": random.uniform(0.06, 0.16),
-                "prevalence": 0.06,
-                "detection_difficulty": "hard"
-            },
-            Neckline.HALTER: {
-                "similarity": random.uniform(0.05, 0.15),
-                "prevalence": 0.04,
-                "detection_difficulty": "hard"
-            },
-            Neckline.OFF_SHOULDER: {
-                "similarity": random.uniform(0.04, 0.14),
-                "prevalence": 0.07,
-                "detection_difficulty": "medium"
-            },
-            Neckline.OTHER: {
-                "similarity": random.uniform(0.02, 0.12),
-                "prevalence": 0.05,
-                "detection_difficulty": "hard"
-            }
-        }
-
-        # Select neckline based on simulated similarity scores
-        necklines = list(neckline_similarities.keys())
-        similarities = [data["similarity"] for data in neckline_similarities.values()]
-        
-        # Normalize similarities to probabilities
-        total_similarity = sum(similarities)
-        probabilities = [sim / total_similarity for sim in similarities]
-        
-        selected_neckline = random.choices(necklines, weights=probabilities)[0]
-
-        # Generate confidence based on similarity score and detection difficulty
-        base_similarity = neckline_similarities[selected_neckline]["similarity"]
-        difficulty = neckline_similarities[selected_neckline]["detection_difficulty"]
-        
-        # Adjust confidence based on detection difficulty
-        if difficulty == "easy":
-            confidence = min(0.95, base_similarity + random.uniform(0.65, 0.80))
-        elif difficulty == "medium":
-            confidence = min(0.90, base_similarity + random.uniform(0.55, 0.70))
-        else:  # hard
-            confidence = min(0.85, base_similarity + random.uniform(0.45, 0.65))
-
-        # Simulate CLIP-like similarity score logging
-        top_similarities = sorted(
-            [(neckline.value, neckline_similarities[neckline]["similarity"]) 
-             for neckline in necklines], 
-            key=lambda x: x[1], 
-            reverse=True
-        )[:3]
-
-        self.logger.info(
-            "Neckline extraction completed",
-            request_id=request_id,
-            detected_neckline=selected_neckline.value,
-            confidence=confidence,
-            top_similarities=top_similarities,
-            processing_time_ms=int(processing_time * 1000),
-        )
-
-        return selected_neckline, confidence
 
     async def _extract_category(
         self, request_id: str, image_paths: list[str]
