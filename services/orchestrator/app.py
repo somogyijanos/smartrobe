@@ -1,22 +1,19 @@
 """
-New capability-based orchestrator service for Smartrobe.
+Simplified orchestrator service for Smartrobe.
 
-Routes attribute extraction requests to appropriate services based on YAML configuration.
-Handles unimplemented attributes with warnings and supports dynamic service routing.
+Clean design: receives n images → determines attributes to extract → calls services in parallel → aggregates results.
 """
 
 import asyncio
-import os
 import time
 import uuid
 import yaml
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from PIL import Image
 
 from shared.database import InferenceRepository, init_database
 from shared.base_service import BaseService
@@ -26,39 +23,30 @@ from shared.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     AttributeModelInfo,
-    AttributeRequest,
     ProcessingInfo,
-    SegmentationRequest,
-    SegmentationResponse,
 )
 
 
-class CapabilityOrchestrator(BaseService):
-    """Capability-based orchestrator for dynamic attribute routing."""
+class SimplifiedOrchestrator(BaseService):
+    """Simplified orchestrator for clean attribute routing."""
 
-    # All 13 required attributes
+    # All supported attributes (can be extended)
     ALL_ATTRIBUTES = [
         "category", "gender", "sleeve_length", "neckline", "closure_type", "fit",
         "color", "material", "pattern", "brand", "style", "season", "condition"
     ]
 
     def __init__(self):
-        super().__init__("orchestrator", "1.0.0")
+        super().__init__("orchestrator", "2.0.0")  # Version bump for simplified design
         self.settings = get_settings()
-        self.client = httpx.AsyncClient(
-            timeout=self.settings.service_request_timeout,
-            limits=httpx.Limits(
-                max_connections=self.settings.max_concurrent_requests,
-                max_keepalive_connections=10,
-            ),
-        )
+        self.client = httpx.AsyncClient(timeout=self.settings.service_request_timeout)
         
-        # Load attribute routing configuration
-        self.attribute_config = self._load_attribute_config()
-        self.service_urls = self._build_service_url_mapping()
+        # Load simplified configuration
+        self.config = self._load_simple_config()
+        self.service_urls = self._build_service_urls()
 
-    def _load_attribute_config(self) -> dict[str, Any]:
-        """Load attribute routing configuration from YAML file."""
+    def _load_simple_config(self) -> Dict[str, Any]:
+        """Load simplified routing configuration."""
         config_path = Path(__file__).parent.parent.parent / "config" / "attribute_routing.yml"
         
         try:
@@ -66,94 +54,56 @@ class CapabilityOrchestrator(BaseService):
                 config = yaml.safe_load(f)
             
             self.logger.info(
-                "Attribute routing configuration loaded",
-                config_file=str(config_path),
-                implemented_attributes=list(config["attribute_mappings"].keys()),
-                total_services=len(config["services"])
+                "Simplified routing configuration loaded",
+                attributes=list(config["attributes"].keys()),
+                services=set(config["attributes"].values()),
             )
-            
             return config
             
         except Exception as e:
-            self.logger.error(
-                "Failed to load attribute routing configuration",
-                config_file=str(config_path),
-                error=str(e)
-            )
-            # Return minimal config to avoid complete failure
+            self.logger.error("Failed to load configuration", error=str(e))
+            # Minimal fallback config
             return {
-                "attribute_mappings": {},
-                "services": [],
-                "routing_config": {
-                    "unimplemented_behavior": "return_null_with_warning",
-                    "default_timeout_seconds": 30
-                }
+                "attributes": {},
+                "timeouts": {"default": 30}
             }
 
-    def _build_service_url_mapping(self) -> dict[str, str]:
-        """Build mapping of service names to their URLs from environment variables."""
-        # Use environment variables for service URLs (12-factor app approach)
-        url_mapping = {
+    def _build_service_urls(self) -> Dict[str, str]:
+        """Build service URL mapping from environment variables."""
+        return {
             "heuristics": self.settings.heuristics_service_url,
-            "llm_multimodal": self.settings.llm_multimodal_service_url,
-            "fashion_clip": self.settings.fashion_clip_service_url,
-            "segmentation_rembg": self.settings.segmentation_rembg_service_url,
+            "llm-multimodal": self.settings.llm_multimodal_service_url,
+            "fashion-clip": self.settings.fashion_clip_service_url,
         }
-            
-        self.logger.info(
-            "Service URL mapping built from environment variables",
-            services=list(url_mapping.keys()),
-            urls=list(url_mapping.values())
-        )
-        
-        return url_mapping
 
     def _add_routes(self, app: FastAPI) -> None:
-        """Add orchestrator routes."""
+        """Add simplified orchestrator routes."""
 
         @app.post("/v1/items/analyze", response_model=AnalyzeResponse)
         async def analyze_item(request: AnalyzeRequest) -> AnalyzeResponse:
             """
-            Analyze clothing item using capability-based routing.
-            
-            Routes each attribute to its configured service and handles
-            unimplemented attributes with warnings.
+            Simplified item analysis: download images → route to services → aggregate results.
             """
             start_time = time.time()
             request_id = uuid.uuid4()
             
-            image_count = len(request.images)
             self.logger.info(
-                "Item analysis request received",
+                "Analysis request received",
                 request_id=str(request_id),
-                image_count=image_count,
+                image_count=len(request.images),
             )
 
             try:
-                # Download and validate images
-                download_start = time.time()
-                image_paths = await self._download_and_validate_images(
-                    request_id, request.images
-                )
-                download_time_ms = int((time.time() - download_start) * 1000)
-
-                # Route attributes to services (includes parallel segmentation)
-                processing_start = time.time()
+                # 1. Download and validate images
+                image_paths = await self._download_images(request_id, request.images)
                 
-                attributes, model_info = await self._route_attributes_to_services(
+                # 2. Extract attributes in parallel
+                attributes, model_info = await self._extract_attributes_parallel(
                     request_id, image_paths
                 )
                 
-                processing_time_ms = int((time.time() - processing_start) * 1000)
+                # 3. Create response
                 total_time_ms = int((time.time() - start_time) * 1000)
-
-                # Determine implemented vs skipped attributes
-                implemented_attrs = [attr for attr in self.ALL_ATTRIBUTES 
-                                   if getattr(attributes, attr) is not None]
-                skipped_attrs = [attr for attr in self.ALL_ATTRIBUTES 
-                               if getattr(attributes, attr) is None]
-
-                # Create response
                 response = AnalyzeResponse(
                     id=request_id,
                     attributes=attributes,
@@ -161,577 +111,229 @@ class CapabilityOrchestrator(BaseService):
                     processing=ProcessingInfo(
                         request_id=request_id,
                         total_processing_time_ms=total_time_ms,
-                        image_download_time_ms=download_time_ms,
+                        image_download_time_ms=0,  # Could track separately if needed
                         timestamp=datetime.utcnow(),
-                        image_count=image_count,
-                        implemented_attributes=implemented_attrs,
-                        skipped_attributes=skipped_attrs,
+                        image_count=len(request.images),
+                        implemented_attributes=[k for k, v in model_info.items() if v.success],
+                        skipped_attributes=[attr for attr in self.ALL_ATTRIBUTES 
+                                          if attr not in self.config["attributes"]],
                     ),
                 )
 
                 # Store in database
-                database_stored = False
                 try:
                     await InferenceRepository.create_inference_result(
                         response, {"images": [str(url) for url in request.images]}
                     )
-                    database_stored = True
                 except Exception as e:
-                    # Log with just the essential error details
                     self.logger.error(
                         f"Failed to store inference result: {type(e).__name__}: {str(e)}",
                         request_id=str(request_id),
                     )
-                    # Don't swallow the exception - let it bubble up or handle appropriately
-                    # For now, we'll continue processing but mark the issue clearly
 
-                # Note: Even if database storage failed, the analysis itself succeeded
                 self.logger.info(
-                    "Item analysis completed",
+                    "Analysis completed",
                     request_id=str(request_id),
                     total_time_ms=total_time_ms,
-                    implemented_count=len(implemented_attrs),
-                    skipped_count=len(skipped_attrs),
-                    database_stored=database_stored,
+                    successful_attributes=len([v for v in model_info.values() if v.success]),
                 )
 
                 return response
 
             except Exception as e:
-                total_time_ms = int((time.time() - start_time) * 1000)
-                
-                self.logger.error(
-                    "Item analysis failed",
-                    request_id=str(request_id),
-                    error=str(e),
-                    total_time_ms=total_time_ms,
-                )
-                
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Analysis failed: {str(e)}"
-                )
+                self.logger.error("Analysis failed", request_id=str(request_id), error=str(e))
+                raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
             finally:
-                # Cleanup request directory (unless debug mode retains images)
+                # Cleanup
                 if not self.settings.debug_retain_images:
-                    try:
-                        cleanup_request_directory(str(request_id))
-                    except Exception as e:
-                        self.logger.warning(
-                            "Failed to cleanup request directory",
-                            request_id=str(request_id),
-                            error=str(e),
-                        )
-                else:
-                    self.logger.info(
-                        "Debug mode: retaining images in request directory",
-                        request_id=str(request_id),
-                        directory=f"{self.settings.shared_storage_path}/{request_id}",
-                    )
+                    cleanup_request_directory(str(request_id))
 
-    async def _route_attributes_to_services(
-        self, request_id: uuid.UUID, image_paths: list[str]
-    ) -> tuple[AllAttributes, dict[str, AttributeModelInfo]]:
+    async def _extract_attributes_parallel(
+        self, request_id: uuid.UUID, image_paths: List[str]
+    ) -> tuple[AllAttributes, Dict[str, AttributeModelInfo]]:
         """
-        Route attributes to their configured services with parallel segmentation.
+        Extract all configured attributes in parallel.
         
-        Returns:
-            Tuple of (attributes, model_info)
+        Simple logic:
+        1. Group attributes by service
+        2. Call each service once with its attributes
+        3. Aggregate results
         """
-        attribute_mappings = self.attribute_config["attribute_mappings"]
-        
-        # Separate implemented from unimplemented attributes
-        implemented_attrs = []
-        unimplemented_attrs = []
-        
-        for attr in self.ALL_ATTRIBUTES:
-            if attr in attribute_mappings:
-                implemented_attrs.append(attr)
-            else:
-                unimplemented_attrs.append(attr)
+        # Group attributes by service
+        service_tasks = {}
+        for attr, service in self.config["attributes"].items():
+            if service not in service_tasks:
+                service_tasks[service] = []
+            service_tasks[service].append(attr)
 
         self.logger.info(
-            "Routing attributes to services with segmentation support",
+            "Starting parallel attribute extraction",
             request_id=str(request_id),
-            implemented=implemented_attrs,
-            unimplemented=unimplemented_attrs,
+            service_tasks=service_tasks,
         )
 
-        # Check if segmentation is needed for any services
-        segmentation_needed = self._check_segmentation_needed(implemented_attrs)
-        
-        # Handle segmentation first if needed
-        segmentation_response = None
-        if segmentation_needed:
-            segmentation_response = await self._call_segmentation_service(request_id, image_paths)
-        
-        # Start attribute extraction tasks with segmentation result
-        attr_tasks = []
-        for attr in implemented_attrs:
-            service_name = attribute_mappings[attr]
-            task = self._call_attribute_service_with_segmentation(
-                request_id, attr, service_name, image_paths, segmentation_response
-            )
-            attr_tasks.append(task)
+        # Create tasks for each service
+        tasks = [
+            self._call_service(request_id, service, attrs, image_paths)
+            for service, attrs in service_tasks.items()
+        ]
 
-        # Execute all attribute extraction tasks in parallel
-        attr_results = await asyncio.gather(*attr_tasks, return_exceptions=True)
+        # Execute all service calls in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Process results
-        attribute_values = {}
+        # Aggregate results
+        all_attributes = {}
         model_info = {}
 
-        # Handle implemented attributes
-        for i, (attr, result) in enumerate(zip(implemented_attrs, attr_results)):
+        for i, (service, attrs) in enumerate(service_tasks.items()):
+            result = results[i]
+            
             if isinstance(result, Exception):
                 self.logger.error(
-                    f"Attribute extraction failed for {attr}",
+                    f"Service {service} failed",
                     request_id=str(request_id),
-                    attribute=attr,
                     error=str(result),
                 )
-                attribute_values[attr] = None
+                # Set all attributes for this service to None
+                for attr in attrs:
+                    all_attributes[attr] = None
+                    model_info[attr] = AttributeModelInfo(
+                        service_name=service,
+                        service_type="unknown",
+                        processing_time_ms=0,
+                        confidence_score=0.0,
+                        success=False,
+                        error_message=str(result),
+                    )
             else:
-                attr_response, model_info_item = result
-                attribute_values[attr] = attr_response.attribute_value
-                model_info[attr] = model_info_item
+                service_results, service_model_info = result
+                all_attributes.update(service_results)
+                model_info.update(service_model_info)
 
-        # Handle unimplemented attributes - just set to None
-        for attr in unimplemented_attrs:
-            attribute_values[attr] = None
+        # Fill in unimplemented attributes as None
+        for attr in self.ALL_ATTRIBUTES:
+            if attr not in all_attributes:
+                all_attributes[attr] = None
 
-        # Create AllAttributes object
-        attributes = AllAttributes(**attribute_values)
+        return AllAttributes(**all_attributes), model_info
 
-        return attributes, model_info
-
-    def _check_segmentation_needed(self, implemented_attrs: list[str]) -> bool:
+    async def _call_service(
+        self, request_id: uuid.UUID, service_name: str, attributes: List[str], image_paths: List[str]
+    ) -> tuple[Dict[str, Any], Dict[str, AttributeModelInfo]]:
         """
-        Check if segmentation is needed for any of the implemented attributes.
+        Call a service to extract multiple attributes.
         
-        Args:
-            implemented_attrs: List of attributes to be extracted
-            
-        Returns:
-            True if segmentation is needed, False otherwise
-        """
-        segmentation_config = self.attribute_config.get("segmentation_config", {})
-        if not segmentation_config.get("enabled", False):
-            return False
-        
-        attribute_mappings = self.attribute_config["attribute_mappings"]
-        
-        for attr in implemented_attrs:
-            service_name = attribute_mappings[attr]
-            # Check if the service for this attribute has segmentation enabled
-            for service in self.attribute_config["services"]:
-                if service["name"] == service_name:
-                    if service.get("segmentation_enabled", False):
-                        self.logger.debug(
-                            f"Segmentation needed for attribute '{attr}' (service: {service_name})"
-                        )
-                        return True
-        
-        return False
-
-    async def _call_segmentation_service(
-        self, request_id: uuid.UUID, image_paths: list[str]
-    ) -> SegmentationResponse:
-        """
-        Call the segmentation service to segment images.
-        
-        Args:
-            request_id: Unique request identifier
-            image_paths: List of paths to original images
-            
-        Returns:
-            SegmentationResponse with segmented image paths
-        """
-        segmentation_config = self.attribute_config.get("segmentation_config", {})
-        
-        # Get segmentation service URL from environment variables  
-        segmentation_url = self.service_urls.get("segmentation_rembg")
-        if not segmentation_url:
-            raise ValueError("Segmentation service URL not found in environment variables")
-
-        endpoint_url = f"{segmentation_url}/segment"
-        
-        request_data = SegmentationRequest(
-            request_id=request_id,
-            image_paths=image_paths,
-            model=segmentation_config.get("model", "u2net"),
-            output_format=segmentation_config.get("output_format", "png"),
-        )
-
-        self.logger.info(
-            "Calling segmentation service",
-            request_id=str(request_id),
-            endpoint_url=endpoint_url,
-            image_count=len(image_paths),
-        )
-
-        start_time = time.time()
-        
-        try:
-            response = await self.client.post(
-                endpoint_url,
-                json=request_data.model_dump(mode='json'),
-            )
-            response.raise_for_status()
-            
-            processing_time_ms = int((time.time() - start_time) * 1000)
-            result = response.json()
-            
-            segmentation_response = SegmentationResponse(**result)
-            
-            successful_count = sum(segmentation_response.success_mask)
-            self.logger.info(
-                "Segmentation service call completed",
-                request_id=str(request_id),
-                successful_segmentations=successful_count,
-                total_images=len(image_paths),
-                processing_time_ms=processing_time_ms,
-            )
-
-            return segmentation_response
-
-        except Exception as e:
-            processing_time_ms = int((time.time() - start_time) * 1000)
-            
-            self.logger.error(
-                "Segmentation service call failed",
-                request_id=str(request_id),
-                error=str(e),
-                processing_time_ms=processing_time_ms,
-            )
-            
-            # Return fallback response with original images
-            return SegmentationResponse(
-                request_id=request_id,
-                original_paths=image_paths,
-                segmented_paths=image_paths,  # Fallback to originals
-                success_mask=[False] * len(image_paths),
-                processing_time_ms=processing_time_ms,
-                success=False,
-                error_message=str(e),
-            )
-
-    async def _call_attribute_service_with_segmentation(
-        self, 
-        request_id: uuid.UUID, 
-        attribute_name: str, 
-        service_name: str, 
-        image_paths: list[str], 
-        segmentation_response: SegmentationResponse | None
-    ) -> tuple[Any, AttributeModelInfo]:
-        """
-        Call an attribute service with optional segmented images.
-        
-        Args:
-            request_id: Unique request identifier
-            attribute_name: Name of the attribute to extract
-            service_name: Name of the service to call
-            image_paths: List of paths to original images
-            segmentation_response: Optional segmentation response (if segmentation was performed)
-            
-        Returns:
-            Tuple of (AttributeResponse, AttributeModelInfo)
-        """
-        # Check if this service needs segmentation
-        service_needs_segmentation = False
-        for service in self.attribute_config["services"]:
-            if service["name"] == service_name:
-                service_needs_segmentation = service.get("segmentation_enabled", False)
-                break
-
-        # Determine which image paths to use
-        segmented_image_paths = None
-        use_segmented = False
-        
-        if service_needs_segmentation and segmentation_response:
-            if segmentation_response.success:
-                # Use mixed mode: segmented where available, original as fallback
-                mixed_paths = []
-                for i, (original, segmented, success) in enumerate(zip(
-                    segmentation_response.original_paths,
-                    segmentation_response.segmented_paths,
-                    segmentation_response.success_mask
-                )):
-                    mixed_paths.append(segmented if success else original)
-                
-                segmented_image_paths = mixed_paths
-                use_segmented = True
-                
-                self.logger.debug(
-                    f"Using segmented images for {attribute_name}",
-                    request_id=str(request_id),
-                    successful_segmentations=sum(segmentation_response.success_mask),
-                    total_images=len(image_paths),
-                )
-            else:
-                self.logger.warning(
-                    f"Segmentation failed for {attribute_name}, using original images",
-                    request_id=str(request_id),
-                    error=segmentation_response.error_message,
-                )
-
-        # Call the attribute service
-        return await self._call_attribute_service(
-            request_id, attribute_name, service_name, image_paths, 
-            segmented_image_paths, use_segmented
-        )
-
-    async def _call_attribute_service(
-        self, 
-        request_id: uuid.UUID, 
-        attribute_name: str, 
-        service_name: str, 
-        image_paths: list[str],
-        segmented_image_paths: list[str] | None = None,
-        use_segmented: bool = False
-    ) -> tuple[Any, AttributeModelInfo]:
-        """
-        Call a specific service for a single attribute.
-        
-        Returns:
-            Tuple of (AttributeResponse, AttributeModelInfo)
+        Each service now receives all attributes it should extract in one call.
         """
         service_url = self.service_urls.get(service_name)
         if not service_url:
-            raise ValueError(f"Service URL not found for service: {service_name}")
+            raise ValueError(f"Service URL not found: {service_name}")
 
-        # Get service type from config
-        service_type = None
-        for service in self.attribute_config["services"]:
-            if service["name"] == service_name:
-                service_type = service["type"]
-                break
-
-        endpoint_url = f"{service_url}/extract/{attribute_name}"
+        endpoint_url = f"{service_url}/extract_batch"
         
-        request_data = AttributeRequest(
-            request_id=request_id,
-            attribute_name=attribute_name,
-            image_paths=image_paths,
-            segmented_image_paths=segmented_image_paths,
-            use_segmented=use_segmented
-        )
+        # New simplified request format
+        request_data = {
+            "request_id": str(request_id),
+            "attributes": attributes,
+            "image_paths": image_paths,
+        }
 
         self.logger.debug(
-            f"Calling service for attribute '{attribute_name}'",
+            f"Calling service {service_name}",
             request_id=str(request_id),
-            service_name=service_name,
-            endpoint_url=endpoint_url,
+            attributes=attributes,
+            endpoint=endpoint_url,
         )
 
         start_time = time.time()
         
         try:
-            response = await self.client.post(
-                endpoint_url,
-                json=request_data.model_dump(mode='json'),
-            )
+            response = await self.client.post(endpoint_url, json=request_data)
             response.raise_for_status()
             
             processing_time_ms = int((time.time() - start_time) * 1000)
             result = response.json()
             
-            # Create AttributeModelInfo
-            model_info = AttributeModelInfo(
-                service_name=service_name,
-                service_type=service_type or "unknown",
-                processing_time_ms=processing_time_ms,
-                confidence_score=result.get("confidence_score", 0.0),
-                success=result.get("success", False),
-                error_message=result.get("error_message"),
-            )
+            # Parse service response
+            service_results = result.get("attributes", {})
+            confidence_scores = result.get("confidence_scores", {})
+            
+            # Create model info for each attribute
+            model_info = {}
+            for attr in attributes:
+                model_info[attr] = AttributeModelInfo(
+                    service_name=service_name,
+                    service_type=result.get("service_type", "unknown"),
+                    processing_time_ms=processing_time_ms,
+                    confidence_score=confidence_scores.get(attr, 0.0),
+                    success=result.get("success", False),
+                    error_message=result.get("error_message"),
+                )
 
             self.logger.debug(
-                f"Service call successful for attribute '{attribute_name}'",
+                f"Service {service_name} completed",
                 request_id=str(request_id),
-                service_name=service_name,
                 processing_time_ms=processing_time_ms,
-                confidence=result.get("confidence_score", 0.0),
+                extracted_attributes=list(service_results.keys()),
             )
 
-            # Parse response into AttributeResponse-like object
-            from types import SimpleNamespace
-            attr_response = SimpleNamespace(
-                request_id=result["request_id"],
-                attribute_name=result["attribute_name"],
-                attribute_value=result["attribute_value"],
-                confidence_score=result["confidence_score"],
-                processing_time_ms=result["processing_time_ms"],
-                success=result["success"],
-                error_message=result.get("error_message")
-            )
-
-            return attr_response, model_info
+            return service_results, model_info
 
         except Exception as e:
             processing_time_ms = int((time.time() - start_time) * 1000)
-            
             self.logger.error(
-                f"Service call failed for attribute '{attribute_name}'",
+                f"Service {service_name} call failed",
                 request_id=str(request_id),
-                service_name=service_name,
                 error=str(e),
                 processing_time_ms=processing_time_ms,
             )
-            
-            raise e
+            raise
 
-    async def _download_and_validate_images(
-        self, request_id: uuid.UUID, image_urls: list[str]
-    ) -> list[str]:
-        """
-        Download and validate images from URLs.
-        
-        Args:
-            request_id: Unique request identifier
-            image_urls: List of HTTPS image URLs
-            
-        Returns:
-            List of local file paths to downloaded images
-        """
-        # Create request-specific directory
+    async def _download_images(self, request_id: uuid.UUID, image_urls: List[str]) -> List[str]:
+        """Download and validate images (simplified version)."""
         request_dir = create_request_directory(str(request_id))
         image_paths = []
 
-        try:
-            for i, url in enumerate(image_urls):
-                self.logger.debug(
-                    "Downloading image",
-                    request_id=str(request_id),
-                    image_index=i,
-                    url=str(url),
-                )
+        for i, url in enumerate(image_urls):
+            # Download image
+            response = await self.client.get(str(url))
+            response.raise_for_status()
 
-                # Download image
-                response = await self.client.get(
-                    str(url),
-                    timeout=self.settings.image_download_timeout,
-                )
-                response.raise_for_status()
+            # Save image
+            image_path = f"{request_dir}/image_{i}.jpg"
+            with open(image_path, "wb") as f:
+                f.write(response.content)
+            
+            image_paths.append(image_path)
 
-                # Check file size
-                content_length = len(response.content)
-                max_size_bytes = self.settings.max_image_size_mb * 1024 * 1024
-                
-                if content_length > max_size_bytes:
-                    raise ValueError(
-                        f"Image {i} too large: {content_length} bytes "
-                        f"(max: {max_size_bytes} bytes)"
-                    )
-
-                # Save image
-                image_path = os.path.join(request_dir, f"image_{i}.jpg")
-                with open(image_path, "wb") as f:
-                    f.write(response.content)
-
-                # Validate image format
-                try:
-                    with Image.open(image_path) as img:
-                        # Convert to RGB if needed and save as JPEG
-                        if img.format.lower() not in self.settings.allowed_image_formats:
-                            raise ValueError(
-                                f"Image {i} format not supported: {img.format}"
-                            )
-                        
-                        # Ensure RGB format for consistency
-                        if img.mode != "RGB":
-                            img = img.convert("RGB")
-                            img.save(image_path, "JPEG", quality=95)
-
-                except Exception as e:
-                    raise ValueError(f"Image {i} validation failed: {str(e)}")
-
-                image_paths.append(image_path)
-
-                self.logger.debug(
-                    "Image downloaded and validated",
-                    request_id=str(request_id),
-                    image_index=i,
-                    file_size=content_length,
-                    local_path=image_path,
-                )
-
-            return image_paths
-
-        except Exception:
-            # Cleanup on failure (unless debug mode retains images)
-            if not self.settings.debug_retain_images:
-                cleanup_request_directory(str(request_id))
-            raise
+        return image_paths
 
     async def _initialize_service(self) -> None:
-        """Initialize orchestrator service."""
+        """Initialize simplified orchestrator."""
         # Initialize database
         await init_database(self.settings.database_url)
-        
-        # Ensure shared storage directory exists
-        os.makedirs(self.settings.shared_storage_path, exist_ok=True)
-        
-        # Test service connectivity
-        await self._test_service_connectivity()
+        self.logger.info("Simplified orchestrator initialized")
 
     async def _cleanup_service(self) -> None:
-        """Cleanup orchestrator service."""
+        """Cleanup orchestrator."""
         await self.client.aclose()
 
     async def _check_service_health(self) -> bool:
-        """Check health of all configured services."""
-        try:
-            # Check database
-            from shared.database import get_database_manager
-            db_manager = get_database_manager()
-            if not await db_manager.health_check():
-                return False
-
-            # Check configured services
-            for service_name, service_url in self.service_urls.items():
-                try:
-                    response = await self.client.get(f"{service_url}/health")
-                    if response.status_code != 200:
-                        self.logger.warning(
-                            f"Service {service_name} health check failed",
-                            status_code=response.status_code,
-                        )
-                        return False
-                except Exception as e:
-                    self.logger.warning(
-                        f"Service {service_name} unreachable",
-                        error=str(e),
-                    )
-                    return False
-
-            return True
-
-        except Exception:
-            return False
-
-    async def _test_service_connectivity(self) -> None:
-        """Test connectivity to all configured services."""
+        """Check health of configured services."""
         for service_name, service_url in self.service_urls.items():
             try:
                 response = await self.client.get(f"{service_url}/health")
-                
-                if response.status_code == 200:
-                    self.logger.info(f"Service {service_name} is reachable")
-                else:
-                    self.logger.warning(
-                        f"Service {service_name} returned status {response.status_code}"
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    f"Service {service_name} is not reachable: {str(e)}"
-                )
+                if response.status_code != 200:
+                    return False
+            except Exception:
+                return False
+        return True
 
 
 def create_app() -> FastAPI:
-    """Create the capability-based orchestrator FastAPI application."""
-    service = CapabilityOrchestrator()
+    """Create the simplified orchestrator FastAPI application."""
+    service = SimplifiedOrchestrator()
     return service.app
 
 
@@ -739,7 +341,6 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-# For development/testing
 if __name__ == "__main__":
-    service = CapabilityOrchestrator()
+    service = SimplifiedOrchestrator()
     service.run()

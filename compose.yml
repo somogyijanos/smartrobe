@@ -44,7 +44,7 @@ services:
       HEURISTICS_SERVICE_URL: http://heuristics:8000
       LLM_MULTIMODAL_SERVICE_URL: http://llm-multimodal:8000
       FASHION_CLIP_SERVICE_URL: http://fashion-clip:8000
-      SEGMENTATION_REMBG_SERVICE_URL: http://segmentation-rembg:8000
+
       
       # Configuration
       MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB}
@@ -71,8 +71,7 @@ services:
         condition: service_healthy
       fashion-clip:
         condition: service_healthy
-      segmentation-rembg:
-        condition: service_healthy
+
     networks:
       - smartrobe-network
     restart: unless-stopped
@@ -137,24 +136,7 @@ services:
       - smartrobe-network
     restart: unless-stopped
 
-  segmentation-rembg:
-    build:
-      context: .
-      dockerfile: ./services/segmentation-rembg/Dockerfile
-    container_name: smartrobe-segmentation-rembg
-    environment:
-      SHARED_STORAGE_PATH: ${SHARED_STORAGE_PATH}
-      LOG_LEVEL: ${LOG_LEVEL}
-      LOG_FORMAT: ${LOG_FORMAT}
-      DEBUG: ${DEBUG}
-      ENVIRONMENT: ${ENVIRONMENT}
-    ports:
-      - "${SEGMENTATION_REMBG_EXTERNAL_PORT}:8000"
-    volumes:
-      - shared_storage:${SHARED_STORAGE_PATH}
-    networks:
-      - smartrobe-network
-    restart: unless-stopped
+
 
 # =============================================================================
 # VOLUMES

@@ -1,87 +1,21 @@
 # =============================================================================
-# ATTRIBUTE ROUTING CONFIGURATION  
+# SIMPLIFIED ATTRIBUTE ROUTING CONFIGURATION  
 # =============================================================================
-# 
-# This file defines which service should handle each clothing attribute.
-# Format: attribute_name -> service_name (1:1 mapping)
-#
-# Available Services:
-# - heuristics: Rule-based analysis for basic visual attributes
-# - llm_multimodal: Multimodal LLM for contextual reasoning
-# - fashion_clip: Pre-trained vision model for fashion understanding
-#
-# All other attributes not listed here will be returned as null with warnings.
-# =============================================================================
+# Clean and lightweight configuration for attribute extraction routing.
+# Each attribute maps to exactly one service - that's it!
 
-# Currently implemented attribute mappings
-attribute_mappings:
-  # Heuristic service - rule-based color detection
-  color: "heuristics"
+# Attribute to service mapping
+attributes:
+  # Heuristics service - works directly with original images
+  color: heuristics
   
-  # Multimodal LLM - seasonal appropriateness reasoning
-  season: "llm_multimodal"
+  # Fashion-CLIP service
+  neckline: fashion-clip
   
-  # Fashion-CLIP - neckline detection via vision
-  neckline: "fashion_clip"
+  # LLM service - handles its own preprocessing
+  season: llm-multimodal
 
-# Unimplemented attributes (will return null with warnings):
-# - category
-# - gender  
-# - sleeve_length
-# - closure_type
-# - fit
-# - material
-# - pattern
-# - brand
-# - style
-# - condition
-
-# Service configuration
-# Note: Future preprocessing services can be added here:
-# - segmentation_sam (SAM-based segmentation)
-# - segmentation_yolo (YOLO-based segmentation) 
-# - pose_estimation (human pose detection)
-# - color_correction (image enhancement)
-# etc.
-services:
-  - name: "segmentation_rembg"
-    type: "vision_classifier"
-    timeout_seconds: 30
-    
-  - name: "heuristics"
-    type: "heuristic"
-    timeout_seconds: 30
-    segmentation_enabled: false  # Color detection works fine on full images
-    
-  - name: "llm_multimodal"
-    type: "llm"
-    timeout_seconds: 45
-    segmentation_enabled: true   # Context reasoning benefits from clean garment images
-    
-  - name: "fashion_clip"
-    type: "pre_trained_vision"
-    timeout_seconds: 20
-    segmentation_enabled: true   # Better neckline detection on segmented garments
-
-# Segmentation configuration
-# Note: This is specific to rembg segmentation. Future segmentation services
-# would have their own config sections (e.g., segmentation_sam_config, etc.)
-segmentation_config:
-  enabled: true
-  fallback_to_original: true  # Use original images if segmentation fails
-  output_format: "png"        # Preserve transparency for better results
-  model: "u2net"              # Default rembg model (u2net, silueta, etc.)
-  concurrent_limit: 3         # Max concurrent segmentation operations
-
-# Routing behavior
-routing_config:
-  # How to handle unimplemented attributes
-  unimplemented_behavior: "return_null_with_warning"  # or "skip" or "error"
-  
-  # Retry configuration
-  max_retry_attempts: 2
-  retry_delay_seconds: 1
-  
-  # Timeout configuration
-  default_timeout_seconds: 30
-  total_request_timeout_seconds: 120
+# Optional service timeouts (seconds)
+timeouts:
+  default: 30
+  llm-multimodal: 45

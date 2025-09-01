@@ -20,7 +20,7 @@ class BaseSettings(BaseModel):
     log_format: str
     debug: bool
     environment: str
-    
+
     @validator("log_level")
     def validate_log_level(cls, v):
         """Validate log level."""
@@ -45,7 +45,7 @@ class BaseSettings(BaseModel):
 class ModelServiceSettings(BaseSettings):
     """Settings for model services (vision, heuristic, llm)."""
     service_port: int = 8000  # All services use same internal port
-    
+
     def get_service_config(self) -> ServiceConfig:
         """Get service configuration."""
         return ServiceConfig(
@@ -57,24 +57,23 @@ class ModelServiceSettings(BaseSettings):
 
 class OrchestratorSettings(BaseSettings):
     """Settings for orchestrator service (needs everything)."""
-    
+
     # Database Configuration
     database_url: str
     postgres_user: str
     postgres_password: str
     postgres_db: str
 
-    # Service Configuration 
+    # Service Configuration
     orchestrator_port: int = 8000  # Same internal port as others
-    
+
     # Debug Configuration
     debug_retain_images: bool = False  # Keep images for debugging
-    
-    # Service URLs for inter-service communication (new capability-based services)
+
+    # Service URLs for inter-service communication (simplified services)
     heuristics_service_url: str
     llm_multimodal_service_url: str
     fashion_clip_service_url: str
-    segmentation_rembg_service_url: str
 
     # Image Processing
     max_image_size_mb: int
@@ -112,11 +111,10 @@ class OrchestratorSettings(BaseSettings):
         """Get the URL for a specific service."""
         url_mapping = {
             "heuristics": self.heuristics_service_url,
-            "llm_multimodal": self.llm_multimodal_service_url,
-            "fashion_clip": self.fashion_clip_service_url,
-            "segmentation_rembg": self.segmentation_rembg_service_url,
+            "llm-multimodal": self.llm_multimodal_service_url,
+            "fashion-clip": self.fashion_clip_service_url,
         }
-        
+
         url = url_mapping.get(service_name)
         if url is None:
             raise ValueError(f"Unknown service: {service_name}")
@@ -162,7 +160,6 @@ def get_orchestrator_settings() -> OrchestratorSettings:
             heuristics_service_url=os.environ["HEURISTICS_SERVICE_URL"],
             llm_multimodal_service_url=os.environ["LLM_MULTIMODAL_SERVICE_URL"],
             fashion_clip_service_url=os.environ["FASHION_CLIP_SERVICE_URL"],
-            segmentation_rembg_service_url=os.environ["SEGMENTATION_REMBG_SERVICE_URL"],
             shared_storage_path=os.environ["SHARED_STORAGE_PATH"],
             max_image_size_mb=int(os.environ["MAX_IMAGE_SIZE_MB"]),
             allowed_image_formats=parse_formats(os.environ["ALLOWED_IMAGE_FORMATS"]),
@@ -173,7 +170,9 @@ def get_orchestrator_settings() -> OrchestratorSettings:
             log_format=os.environ["LOG_FORMAT"],
             debug=parse_bool(os.environ["DEBUG"]),
             environment=os.environ["ENVIRONMENT"],
-            debug_retain_images=parse_bool(os.environ.get("DEBUG_RETAIN_IMAGES", "false")),
+            debug_retain_images=parse_bool(
+                os.environ.get("DEBUG_RETAIN_IMAGES", "false")
+            ),
         )
     return get_orchestrator_settings._instance
 

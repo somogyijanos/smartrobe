@@ -278,6 +278,68 @@ class CapabilityService(BaseService):
                 name=f"extract_{attr_name}"
             )
 
+        # Add batch extraction endpoint
+        @app.post("/extract_batch")
+        async def extract_batch(request_data: dict):
+            """Extract multiple attributes in a single request (simplified API)."""
+            start_time = time.time()
+            request_id = request_data.get("request_id", "unknown")
+            attributes = request_data.get("attributes", [])
+            image_paths = request_data.get("image_paths", [])
+
+            self.logger.info(
+                "Batch extraction request received",
+                request_id=request_id,
+                attributes=attributes,
+                image_count=len(image_paths),
+            )
+
+            # Extract all requested attributes
+            results = {}
+            confidence_scores = {}
+
+            for attr in attributes:
+                if attr in self.SUPPORTED_ATTRIBUTES:
+                    try:
+                        value, confidence = await self.extract_single_attribute(
+                            request_id, attr, image_paths
+                        )
+                        results[attr] = value
+                        confidence_scores[attr] = confidence
+                    except Exception as e:
+                        self.logger.error(
+                            f"Failed to extract {attr}",
+                            request_id=request_id,
+                            error=str(e),
+                        )
+                        results[attr] = None
+                        confidence_scores[attr] = 0.0
+                else:
+                    self.logger.warning(
+                        f"Unsupported attribute: {attr}",
+                        request_id=request_id,
+                        supported=list(self.SUPPORTED_ATTRIBUTES.keys()),
+                    )
+                    results[attr] = None
+                    confidence_scores[attr] = 0.0
+
+            processing_time_ms = int((time.time() - start_time) * 1000)
+
+            self.logger.info(
+                "Batch extraction completed",
+                request_id=request_id,
+                processing_time_ms=processing_time_ms,
+                extracted_count=len([v for v in results.values() if v is not None]),
+            )
+
+            return {
+                "success": True,
+                "service_type": self.service_type,
+                "attributes": results,
+                "confidence_scores": confidence_scores,
+                "processing_time_ms": processing_time_ms,
+            }
+
         # Add capabilities endpoint
         @app.get("/capabilities")
         async def get_capabilities():
@@ -289,7 +351,7 @@ class CapabilityService(BaseService):
                 "version": self.version,
                 "endpoints": [
                     f"/extract/{attr}" for attr in self.get_supported_attributes()
-                ]
+                ] + ["/extract_batch"]
             }
 
     def _create_attribute_endpoint(self, attribute_name: str):
@@ -310,19 +372,9 @@ class CapabilityService(BaseService):
                     image_count=len(request.image_paths),
                 )
 
-                # Determine which image paths to use
-                image_paths_to_use = request.image_paths
-                if request.use_segmented and request.segmented_image_paths:
-                    image_paths_to_use = request.segmented_image_paths
-                    self.logger.debug(
-                        f"Using segmented images for {attribute_name}",
-                        request_id=str(request.request_id),
-                        segmented_count=len(request.segmented_image_paths),
-                    )
-
                 # Extract the specific attribute
                 attribute_value, confidence_score = await self.extract_single_attribute(
-                    str(request.request_id), attribute_name, image_paths_to_use
+                    str(request.request_id), attribute_name, request.image_paths
                 )
 
                 processing_time_ms = int((time.time() - start_time) * 1000)
