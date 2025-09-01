@@ -11,6 +11,7 @@ attributes:
   
   # Fashion-CLIP service
   neckline: fashion-clip
+  category: fashion-clip
   
   # LLM service - handles its own preprocessing
   season: llm-multimodal

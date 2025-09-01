@@ -11,10 +11,12 @@ dependencies = [
     "pillow",
     "loguru",
     "python-multipart",
-    # Add CLIP-specific dependencies here when needed
-    # "torch",
-    # "transformers",
-    # "fashion-clip",
+    # ML dependencies for marqo-fashionSigLIP
+    "torch",
+    "transformers==4.50.3",
+    "accelerate",
+    "open-clip-torch",
+    "ftfy",
 ]
 
 [build-system]

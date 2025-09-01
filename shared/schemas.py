@@ -21,18 +21,93 @@ from pydantic import BaseModel, Field, HttpUrl, validator
 
 
 class ClothingCategory(str, Enum):
-    """Clothing item categories."""
+    """Detailed clothing item categories."""
 
+    # Headwear
+    HAT = "hat"
+    CAP = "cap"
+    BEANIE = "beanie"
+    
+    # Tops - Basic
+    T_SHIRT = "t-shirt"
     SHIRT = "shirt"
-    PANTS = "pants"
-    DRESS = "dress"
-    JACKET = "jacket"
-    SKIRT = "skirt"
-    SWEATER = "sweater"
     BLOUSE = "blouse"
+    TANK_TOP = "tank top"
+    POLO_SHIRT = "polo shirt"
+    
+    # Tops - Warm/Layering
+    SWEATER = "sweater"
+    HOODIE = "hoodie"
+    CARDIGAN = "cardigan"
+    
+    # Outerwear
+    JACKET = "jacket"
+    COAT = "coat"
+    BLAZER = "blazer"
+    VEST = "vest"
+    
+    # Bottoms - Pants
+    JEANS = "jeans"
+    PANTS = "pants"
+    TROUSERS = "trousers"
+    LEGGINGS = "leggings"
+    SWEATPANTS = "sweatpants"
+    JOGGERS = "joggers"
+    CHINOS = "chinos"
+    
+    # Bottoms - Other
     SHORTS = "shorts"
-    SUIT = "suit"
-    OTHER = "other"
+    SKIRT = "skirt"
+    
+    # Dresses/One-piece
+    DRESS = "dress"
+    JUMPSUIT = "jumpsuit"
+    ROMPER = "romper"
+    
+    # Footwear
+    SHOES = "shoes"
+    SNEAKERS = "sneakers"
+    BOOTS = "boots"
+    SANDALS = "sandals"
+    HEELS = "heels"
+    FLATS = "flats"
+    LOAFERS = "loafers"
+    SLIPPERS = "slippers"
+    ATHLETIC_SHOES = "athletic shoes"
+    DRESS_SHOES = "dress shoes"
+    
+    # Undergarments
+    SOCKS = "socks"
+    UNDERWEAR = "underwear"
+    BRA = "bra"
+    
+    # Swimwear
+    SWIMSUIT = "swimsuit"
+    BIKINI = "bikini"
+    SWIM_TRUNKS = "swim trunks"
+    
+    # Accessories - Wearable
+    SCARF = "scarf"
+    GLOVES = "gloves"
+    MITTENS = "mittens"
+    BELT = "belt"
+    TIE = "tie"
+    BOW_TIE = "bow tie"
+    
+    # Accessories - Jewelry
+    JEWELRY = "jewelry"
+    NECKLACE = "necklace"
+    EARRINGS = "earrings"
+    BRACELET = "bracelet"
+    WATCH = "watch"
+    RING = "ring"
+    SUNGLASSES = "sunglasses"
+    
+    # Bags
+    PURSE = "purse"
+    HANDBAG = "handbag"
+    BACKPACK = "backpack"
+    WALLET = "wallet"
 
 
 class Gender(str, Enum):
