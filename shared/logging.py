@@ -24,8 +24,8 @@ def setup_logging(service_name: str, settings=None) -> None:
         format_string = "{message}"
         serialize_logs = True
     else:
-        # For text format, use a readable format
-        format_string = "{time:HH:mm:ss} | {level: <8} | {message}"
+        # For text format, use a readable format that includes extra fields
+        format_string = "{time:HH:mm:ss} | {level: <8} | {message} | {extra}"
         serialize_logs = False
 
     # Add console handler
